@@ -4,16 +4,176 @@ import { Camera } from '@mediapipe/camera_utils';
 import { Hands, type Results } from '@mediapipe/hands';
 import { drawCanvas } from './utils/drawCanvas';
 
+import * as THREE from 'three';
+import { vec3, mat3, quat } from 'gl-matrix';
+
+type LM = { x: number; y: number; z: number };
+
+const WIDTH = 1280;
+const HEIGHT = 720;
+const MIRROR_X = true;
+
+const HAND_LM = {
+	WRIST: 0,
+	INDEX_MCP: 5,
+	MIDDLE_MCP: 9,
+	MIDDLE_TIP: 12,
+	PINKY_MCP: 17,
+};
+
+function makeAxis(color: number, size: number, radius: number, axis: 'x' | 'y' | 'z') {
+	const group = new THREE.Object3D();
+	const shaftLen = size * 0.8;
+	const headLen = size * 0.2;
+	const material = new THREE.MeshBasicMaterial({ color });
+
+	const shaftGeo = new THREE.CylinderGeometry(radius, radius, shaftLen, 12);
+	const headGeo = new THREE.ConeGeometry(radius * 1.8, headLen, 12);
+
+	const shaft = new THREE.Mesh(shaftGeo, material);
+	shaft.position.y = shaftLen * 0.5;
+	group.add(shaft);
+
+	const head = new THREE.Mesh(headGeo, material);
+	head.position.y = shaftLen + headLen * 0.5;
+	group.add(head);
+
+	if (axis === 'x') group.rotation.z = -Math.PI / 2;
+	if (axis === 'z') group.rotation.x = Math.PI / 2;
+
+	return group;
+}
+
+function makeHandGizmo(size = 60) {
+	const root = new THREE.Object3D();
+	const radius = Math.max(1.5, size * 0.03);
+
+	root.add(makeAxis(0xff3333, size, radius, 'x'));
+	root.add(makeAxis(0x33ff33, size, radius, 'y'));
+	root.add(makeAxis(0x3333ff, size, radius, 'z'));
+
+	return root;
+}
+
+function mirrorLandmarks(landmarks: LM[], isWorld: boolean) {
+	if (!MIRROR_X) return landmarks;
+	return landmarks.map(lm => ({
+		x: isWorld ? -lm.x : 1 - lm.x,
+		y: lm.y,
+		z: lm.z,
+	}));
+}
+
+function poseFromHandLandmarks(lms: LM[], yIsBackOfHand = true) {
+	const w = vec3.fromValues(lms[HAND_LM.WRIST].x, lms[HAND_LM.WRIST].y, lms[HAND_LM.WRIST].z);
+	const i = vec3.fromValues(lms[HAND_LM.INDEX_MCP].x, lms[HAND_LM.INDEX_MCP].y, lms[HAND_LM.INDEX_MCP].z);
+	const p = vec3.fromValues(lms[HAND_LM.PINKY_MCP].x, lms[HAND_LM.PINKY_MCP].y, lms[HAND_LM.PINKY_MCP].z);
+	const mt = vec3.fromValues(lms[HAND_LM.MIDDLE_TIP].x, lms[HAND_LM.MIDDLE_TIP].y, lms[HAND_LM.MIDDLE_TIP].z);
+
+	const vIndex = vec3.sub(vec3.create(), i, w);
+	const vPinky = vec3.sub(vec3.create(), p, w);
+	const nPalm = vec3.normalize(vec3.create(), vec3.cross(vec3.create(), vIndex, vPinky));
+
+	const y = vec3.clone(nPalm);
+	if (yIsBackOfHand) vec3.scale(y, y, -1);
+
+	const d = vec3.sub(vec3.create(), mt, w);
+	const yComp = vec3.scale(vec3.create(), y, vec3.dot(d, y));
+	const zRaw = vec3.sub(vec3.create(), d, yComp);
+	const z = vec3.normalize(vec3.create(), zRaw);
+
+	const x = vec3.normalize(vec3.create(), vec3.cross(vec3.create(), y, z));
+	const z2 = vec3.normalize(vec3.create(), vec3.cross(vec3.create(), x, y));
+
+	const rot = mat3.fromValues(
+		x[0], y[0], z2[0],
+		x[1], y[1], z2[1],
+		x[2], y[2], z2[2],
+	);
+	const q = quat.normalize(quat.create(), quat.fromMat3(quat.create(), rot));
+
+	return { position: w, quaternion: q };
+}
+
 function App() {
 	const webcamRef = useRef<Webcam>(null)
 	const canvasRef = useRef<HTMLCanvasElement>(null)
+	const threeCanvasRef = useRef<HTMLCanvasElement>(null)
 	const resultsRef = useRef<any>(null)
+	const threeStateRef = useRef<{
+		renderer: THREE.WebGLRenderer;
+		scene: THREE.Scene;
+		camera: THREE.OrthographicCamera;
+		gizmos: THREE.Object3D[];
+	} | null>(null)
 
 	const onResults = useCallback((results: Results) => {
 		resultsRef.current = results
 
 		const canvasCtx = canvasRef.current!.getContext('2d')!
 		drawCanvas(canvasCtx, results)
+
+		const st = threeStateRef.current
+		if (!st) return
+
+		const hands2d = results.multiHandLandmarks ?? []
+		const hands3d = results.multiHandWorldLandmarks ?? []
+
+		for (let hi = 0; hi < st.gizmos.length; hi++) {
+			const gizmo = st.gizmos[hi]
+			const lm2d = hands2d[hi]
+			if (!lm2d) {
+				gizmo.visible = false
+				continue
+			}
+			gizmo.visible = true
+
+			const wrist2d = lm2d[0]
+			const x = (MIRROR_X ? 1 - wrist2d.x : wrist2d.x) * WIDTH
+			const y = (1 - wrist2d.y) * HEIGHT
+			const z = -wrist2d.z * 300
+			gizmo.position.set(x, y, z)
+
+			const lmForRot = hands3d[hi]?.map(p => ({ x: p.x, y: p.y, z: p.z }))
+				?? lm2d.map(p => ({ x: p.x, y: p.y, z: p.z }))
+			const mirrored = mirrorLandmarks(lmForRot, Boolean(hands3d[hi]))
+			const { quaternion } = poseFromHandLandmarks(mirrored, true)
+			gizmo.quaternion.set(quaternion[0], quaternion[1], quaternion[2], quaternion[3])
+		}
+	}, [])
+
+	useEffect(() => {
+		const canvas = threeCanvasRef.current
+		if (!canvas) return
+
+		const renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true })
+		renderer.setSize(WIDTH, HEIGHT, false)
+		renderer.setPixelRatio(window.devicePixelRatio)
+
+		const scene = new THREE.Scene()
+		const camera = new THREE.OrthographicCamera(0, WIDTH, HEIGHT, 0, -1000, 1000)
+		camera.position.z = 10
+
+		const gizmos = [makeHandGizmo(60), makeHandGizmo(60)]
+		gizmos.forEach(g => {
+			g.visible = false
+			scene.add(g)
+		})
+
+		threeStateRef.current = { renderer, scene, camera, gizmos }
+
+		let raf = 0
+		const tick = () => {
+			raf = requestAnimationFrame(tick)
+			renderer.render(scene, camera)
+		}
+		tick()
+
+		return () => {
+			cancelAnimationFrame(raf)
+			renderer.dispose()
+			threeStateRef.current = null
+		}
 	}, [])
 
 	useEffect(() => {
@@ -45,8 +205,8 @@ function App() {
 	}, [onResults])
 
 	const videoConstraints = {
-		width: 1280,
-		height: 720,
+		width: WIDTH,
+		height: HEIGHT,
 		facingMode: 'user'
 	}
 
@@ -54,8 +214,8 @@ function App() {
 		<div
             style={{
                 position: 'relative',
-                width: '1280px',
-                height: '720px',
+                width: `${WIDTH}px`,
+                height: `${HEIGHT}px`,
             }}
         >
 			{/* capture */}
@@ -65,21 +225,34 @@ function App() {
                     visibility: 'hidden',
                     position: 'absolute',
                 }}
-				width={1280}
-				height={720}
+				width={WIDTH}
+				height={HEIGHT}
 				ref={webcamRef}
 				screenshotFormat="image/jpeg"
 				videoConstraints={videoConstraints}
 			/>
 			<canvas 
                 ref={canvasRef} 
+				width={WIDTH}
+				height={HEIGHT}
                 style={{
                     position: 'absolute',
-                    width: '1280px',
-                    height: '720px',
+                    width: `${WIDTH}px`,
+                    height: `${HEIGHT}px`,
                     backgroundColor: '#fff',
                 }}
             />
+			<canvas
+				ref={threeCanvasRef}
+				width={WIDTH}
+				height={HEIGHT}
+				style={{
+					position: 'absolute',
+					width: `${WIDTH}px`,
+					height: `${HEIGHT}px`,
+					pointerEvents: 'none',
+				}}
+			/>
 		</div>
 	)
 }

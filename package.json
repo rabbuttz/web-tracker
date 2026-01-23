@@ -13,14 +13,17 @@
     "@mediapipe/camera_utils": "^0.3.1675466862",
     "@mediapipe/drawing_utils": "^0.3.1675466124",
     "@mediapipe/hands": "^0.4.1675469240",
+    "gl-matrix": "^3.4.4",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
-    "react-webcam": "^7.2.0"
+    "react-webcam": "^7.2.0",
+    "three": "^0.164.1"
   },
   "devDependencies": {
     "@eslint/js": "^9.25.0",
     "@types/react": "^19.1.2",
     "@types/react-dom": "^19.1.2",
+    "@types/three": "^0.182.0",
     "@vitejs/plugin-react": "^4.4.1",
     "eslint": "^9.25.0",
     "eslint-plugin-react-hooks": "^5.2.0",
