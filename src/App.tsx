@@ -71,7 +71,9 @@ function poseFromHandLandmarks(lms: LM[], handedness?: string) {
 		vec3.create(),
 		isLeft ? vec3.sub(vec3.create(), p, i) : vec3.sub(vec3.create(), i, p),
 	);
-	const yBack = vec3.scale(vec3.create(), nPalm, -1);
+	const yBack = isLeft
+		? vec3.scale(vec3.create(), nPalm, -1)
+		: vec3.normalize(vec3.create(), nPalm);
 	let y = vec3.normalize(vec3.create(), vec3.cross(vec3.create(), z, xRaw));
 	if (vec3.dot(y, yBack) < 0) {
 		vec3.scale(xRaw, xRaw, -1);
