@@ -100,6 +100,7 @@ function App() {
 	const canvasRef = useRef<HTMLCanvasElement>(null)
 	const threeCanvasRef = useRef<HTMLCanvasElement>(null)
 	const resultsRef = useRef<any>(null)
+	const wsRef = useRef<WebSocket | null>(null)
 	const threeStateRef = useRef<{
 		renderer: THREE.WebGLRenderer;
 		scene: THREE.Scene;
@@ -118,6 +119,13 @@ function App() {
 
 		const hands2d = results.multiHandLandmarks ?? []
 		const hands3d = results.multiHandWorldLandmarks ?? []
+		const handedness = results.multiHandedness ?? []
+
+		const ws = wsRef.current
+		const sendParam = (path: string, values: number[]) => {
+			if (!ws || ws.readyState !== WebSocket.OPEN) return
+			ws.send(`${path} [${values.join(';')}]`)
+		}
 
 		for (let hi = 0; hi < st.gizmos.length; hi++) {
 			const gizmo = st.gizmos[hi]
@@ -139,6 +147,31 @@ function App() {
 			const mirrored = mirrorLandmarks(lmForRot, Boolean(hands3d[hi]))
 			const { quaternion } = poseFromHandLandmarks(mirrored, true)
 			gizmo.quaternion.set(quaternion[0], quaternion[1], quaternion[2], quaternion[3])
+
+			const label = handedness[hi]?.label
+			const suffix = label === 'Left' ? 'L' : label === 'Right' ? 'R' : (hi === 0 ? 'L' : 'R')
+			const positionPath = `/avatar/parameters/Hand.${suffix}.Position`
+			const rotationPath = `/avatar/parameters/Hand.${suffix}.Rotation`
+
+			const normX = MIRROR_X ? 1 - wrist2d.x : wrist2d.x
+			const normY = 1 - wrist2d.y
+			const normZ = wrist2d.z
+			sendParam(positionPath, [normX, normY, normZ])
+			sendParam(rotationPath, [
+				gizmo.quaternion.x,
+				gizmo.quaternion.y,
+				gizmo.quaternion.z,
+				gizmo.quaternion.w,
+			])
+		}
+	}, [])
+
+	useEffect(() => {
+		const ws = new WebSocket('ws://localhost:3456')
+		wsRef.current = ws
+		return () => {
+			ws.close()
+			wsRef.current = null
 		}
 	}, [])
 
