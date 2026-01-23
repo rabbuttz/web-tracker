@@ -55,15 +55,6 @@ function makeHandGizmo(size = 60) {
 	return root;
 }
 
-function mirrorLandmarks(landmarks: LM[], isWorld: boolean, flipX: boolean) {
-	if (!flipX) return landmarks;
-	return landmarks.map(lm => ({
-		x: isWorld ? -lm.x : 1 - lm.x,
-		y: lm.y,
-		z: lm.z,
-	}));
-}
-
 function poseFromHandLandmarks(lms: LM[], handedness?: string) {
 	const w = vec3.fromValues(lms[HAND_LM.WRIST].x, lms[HAND_LM.WRIST].y, lms[HAND_LM.WRIST].z);
 	const i = vec3.fromValues(lms[HAND_LM.INDEX_MCP].x, lms[HAND_LM.INDEX_MCP].y, lms[HAND_LM.INDEX_MCP].z);
@@ -148,15 +139,12 @@ function App() {
 
 			const lmForRot = hands3d[hi]?.map(p => ({ x: p.x, y: p.y, z: p.z }))
 				?? lm2d.map(p => ({ x: p.x, y: p.y, z: p.z }))
-			const isWorld = Boolean(hands3d[hi])
 			const rawLabel = handedness[hi]?.label
 			const label = MIRROR_X
 				? (rawLabel === 'Left' ? 'Right' : rawLabel === 'Right' ? 'Left' : rawLabel)
 				: rawLabel
 			const rotLabel = label ?? (hi === 0 ? 'Left' : 'Right')
-			const flipXToRight = rotLabel === 'Left'
-			const rotLms = mirrorLandmarks(lmForRot, isWorld, flipXToRight)
-			const { quaternion } = poseFromHandLandmarks(rotLms, rotLabel)
+			const { quaternion } = poseFromHandLandmarks(lmForRot, rotLabel)
 			gizmo.quaternion.set(quaternion[0], quaternion[1], quaternion[2], quaternion[3])
 			const suffix = label === 'Left' ? 'L' : label === 'Right' ? 'R' : (hi === 0 ? 'L' : 'R')
 			const positionPath = `/avatar/parameters/Hand.${suffix}.Position`
