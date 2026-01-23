@@ -64,7 +64,7 @@ function mirrorLandmarks(landmarks: LM[], isWorld: boolean, flipX: boolean) {
 	}));
 }
 
-function poseFromHandLandmarks(lms: LM[], yIsBackOfHand = true) {
+function poseFromHandLandmarks(lms: LM[], handedness?: string) {
 	const w = vec3.fromValues(lms[HAND_LM.WRIST].x, lms[HAND_LM.WRIST].y, lms[HAND_LM.WRIST].z);
 	const i = vec3.fromValues(lms[HAND_LM.INDEX_MCP].x, lms[HAND_LM.INDEX_MCP].y, lms[HAND_LM.INDEX_MCP].z);
 	const p = vec3.fromValues(lms[HAND_LM.PINKY_MCP].x, lms[HAND_LM.PINKY_MCP].y, lms[HAND_LM.PINKY_MCP].z);
@@ -75,8 +75,12 @@ function poseFromHandLandmarks(lms: LM[], yIsBackOfHand = true) {
 	const nPalm = vec3.normalize(vec3.create(), vec3.cross(vec3.create(), vIndex, vPinky));
 
 	const z = vec3.normalize(vec3.create(), vec3.sub(vec3.create(), mm, w));
-	let xRaw = vec3.normalize(vec3.create(), vec3.sub(vec3.create(), i, p));
-	const yBack = yIsBackOfHand ? vec3.scale(vec3.create(), nPalm, -1) : nPalm;
+	const isLeft = handedness === 'Left';
+	let xRaw = vec3.normalize(
+		vec3.create(),
+		isLeft ? vec3.sub(vec3.create(), p, i) : vec3.sub(vec3.create(), i, p),
+	);
+	const yBack = vec3.scale(vec3.create(), nPalm, -1);
 	let y = vec3.normalize(vec3.create(), vec3.cross(vec3.create(), z, xRaw));
 	if (vec3.dot(y, yBack) < 0) {
 		vec3.scale(xRaw, xRaw, -1);
@@ -152,7 +156,7 @@ function App() {
 			const rotLabel = label ?? (hi === 0 ? 'Left' : 'Right')
 			const flipXToRight = rotLabel === 'Left'
 			const rotLms = mirrorLandmarks(lmForRot, isWorld, flipXToRight)
-			const { quaternion } = poseFromHandLandmarks(rotLms, true)
+			const { quaternion } = poseFromHandLandmarks(rotLms, rotLabel)
 			gizmo.quaternion.set(quaternion[0], quaternion[1], quaternion[2], quaternion[3])
 			const suffix = label === 'Left' ? 'L' : label === 'Right' ? 'R' : (hi === 0 ? 'L' : 'R')
 			const positionPath = `/avatar/parameters/Hand.${suffix}.Position`
