@@ -68,27 +68,27 @@ function poseFromHandLandmarks(lms: LM[], yIsBackOfHand = true) {
 	const w = vec3.fromValues(lms[HAND_LM.WRIST].x, lms[HAND_LM.WRIST].y, lms[HAND_LM.WRIST].z);
 	const i = vec3.fromValues(lms[HAND_LM.INDEX_MCP].x, lms[HAND_LM.INDEX_MCP].y, lms[HAND_LM.INDEX_MCP].z);
 	const p = vec3.fromValues(lms[HAND_LM.PINKY_MCP].x, lms[HAND_LM.PINKY_MCP].y, lms[HAND_LM.PINKY_MCP].z);
-	const mt = vec3.fromValues(lms[HAND_LM.MIDDLE_TIP].x, lms[HAND_LM.MIDDLE_TIP].y, lms[HAND_LM.MIDDLE_TIP].z);
 	const mm = vec3.fromValues(lms[HAND_LM.MIDDLE_MCP].x, lms[HAND_LM.MIDDLE_MCP].y, lms[HAND_LM.MIDDLE_MCP].z);
 
 	const vIndex = vec3.sub(vec3.create(), i, w);
 	const vPinky = vec3.sub(vec3.create(), p, w);
 	const nPalm = vec3.normalize(vec3.create(), vec3.cross(vec3.create(), vIndex, vPinky));
 
-	const z = vec3.normalize(vec3.create(), vec3.sub(vec3.create(), mt, mm));
-	let x = vec3.normalize(vec3.create(), vec3.sub(vec3.create(), p, i));
-	const zComp = vec3.scale(vec3.create(), z, vec3.dot(x, z));
-	x = vec3.normalize(vec3.create(), vec3.sub(vec3.create(), x, zComp));
-	let y = vec3.normalize(vec3.create(), vec3.cross(vec3.create(), z, x));
-	if (yIsBackOfHand && vec3.dot(y, nPalm) > 0) {
-		vec3.scale(y, y, -1);
-		vec3.scale(x, x, -1);
+	const z = vec3.normalize(vec3.create(), vec3.sub(vec3.create(), mm, w));
+	let xRaw = vec3.normalize(vec3.create(), vec3.sub(vec3.create(), i, p));
+	const yBack = yIsBackOfHand ? vec3.scale(vec3.create(), nPalm, -1) : nPalm;
+	let y = vec3.normalize(vec3.create(), vec3.cross(vec3.create(), z, xRaw));
+	if (vec3.dot(y, yBack) < 0) {
+		vec3.scale(xRaw, xRaw, -1);
+		y = vec3.normalize(vec3.create(), vec3.cross(vec3.create(), z, xRaw));
 	}
+	const x = vec3.normalize(vec3.create(), vec3.cross(vec3.create(), y, z));
+	const y2 = vec3.normalize(vec3.create(), vec3.cross(vec3.create(), z, x));
 
 	const rot = mat3.fromValues(
-		x[0], y[0], z[0],
-		x[1], y[1], z[1],
-		x[2], y[2], z[2],
+		x[0], x[1], x[2],
+		y2[0], y2[1], y2[2],
+		z[0], z[1], z[2],
 	);
 	const q = quat.normalize(quat.create(), quat.fromMat3(quat.create(), rot));
 
@@ -149,8 +149,9 @@ function App() {
 			const label = MIRROR_X
 				? (rawLabel === 'Left' ? 'Right' : rawLabel === 'Right' ? 'Left' : rawLabel)
 				: rawLabel
-			let rotLms = mirrorLandmarks(lmForRot, isWorld, MIRROR_X)
-			if (label === 'Right') rotLms = mirrorLandmarks(rotLms, isWorld, true)
+			const rotLabel = label ?? (hi === 0 ? 'Left' : 'Right')
+			const flipXToRight = rotLabel === 'Left'
+			const rotLms = mirrorLandmarks(lmForRot, isWorld, flipXToRight)
 			const { quaternion } = poseFromHandLandmarks(rotLms, true)
 			gizmo.quaternion.set(quaternion[0], quaternion[1], quaternion[2], quaternion[3])
 			const suffix = label === 'Left' ? 'L' : label === 'Right' ? 'R' : (hi === 0 ? 'L' : 'R')
