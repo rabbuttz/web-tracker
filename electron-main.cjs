@@ -1,8 +1,8 @@
 const { app, BrowserWindow, ipcMain } = require('electron');
 const path = require('path');
-const { Client } = require('node-osc');
+const osc = require('node-osc');
 
-const oscClient = new Client('127.0.0.1', 9000);
+const oscClient = new osc.Client('127.0.0.1', 9000);
 
 function createWindow() {
     const win = new BrowserWindow({
@@ -44,7 +44,8 @@ app.on('window-all-closed', () => {
 });
 
 ipcMain.on('osc-send', (event, { path, value }) => {
-    oscClient.send(path, value, (err) => {
+    const oscPath = path.startsWith('/') ? path : `/${path}`;
+    oscClient.send(oscPath, value, (err) => {
         if (err) console.error('OSC Error:', err);
     });
 });

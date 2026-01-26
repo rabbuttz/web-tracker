@@ -27,29 +27,20 @@ function App() {
 
 	const handResultsRef = useRef<HandResults | null>(null)
 	const faceResultsRef = useRef<FaceResults | null>(null)
-	const wsRef = useRef<WebSocket | null>(null)
 
 	const threeStateRef = useThreeManager(threeCanvasRef.current)
 
-	const formatVec = (v: number[]) => `[${v.map(n => n.toFixed(4)).join(',')}]`
+	const formatVec = (v: number[]) => `[${v.map(n => n.toFixed(4)).join(';')}]`
 
 	const sendParam = (path: string, values: number[]) => {
-		const ws = wsRef.current
-		if (ws && ws.readyState === WebSocket.OPEN) {
-			ws.send(`${path} [${values.join(';')}]`)
-		}
-
-		// Send OSC via Electron
 		if (window.electronAPI) {
-			if (path.includes('Rotation')) {
-				// Hand and Face rotation paths contain 'Rotation'
-				window.electronAPI.oscSend(path, formatVec(values))
-			} else if (path.includes('Position')) {
-				window.electronAPI.oscSend(path, formatVec(values))
+			let val: any = values
+			if (path.includes('Rotation') || path.includes('Position')) {
+				val = formatVec(values)
 			} else {
-				// Fallback or other params
-				window.electronAPI.oscSend(path, values.length === 1 ? values[0] : formatVec(values))
+				val = values.length === 1 ? values[0] : formatVec(values)
 			}
+			window.electronAPI.oscSend(path, val)
 		}
 	}
 
@@ -145,10 +136,8 @@ function App() {
 			const normY = 1 - nose2d.y
 			const normZ = nose2d.z
 
-			sendParam('/avatar/parameters/Face.Position', [normX, normY, normZ])
-			sendParam('/avatar/parameters/Face.Rotation', [quaternion[0], quaternion[1], quaternion[2], quaternion[3]])
-
-			// Requested paths
+			sendParam('/avatar/parameters/Head.Position', [normX, normY, normZ])
+			sendParam('/avatar/parameters/Head.Rotation', [quaternion[0], quaternion[1], quaternion[2], quaternion[3]])
 			sendParam('Head.Rotation', [quaternion[0], quaternion[1], quaternion[2], quaternion[3]])
 
 			// MouthOpen calculation
@@ -159,8 +148,6 @@ function App() {
 
 		} else {
 			st.faceGizmo.visible = false
-			// Optional: send default values when face is lost
-			sendParam('/avatar/parameters/MouthOpen', [0])
 		}
 	}, [threeStateRef])
 
@@ -187,15 +174,6 @@ function App() {
 		selectedDeviceId
 	)
 
-	// WebSocket setup
-	useEffect(() => {
-		const ws = new WebSocket('ws://localhost:3456')
-		wsRef.current = ws
-		return () => {
-			ws.close()
-			wsRef.current = null
-		}
-	}, [])
 
 	return (
 		<div className="app-container" style={{ position: 'relative', width: WIDTH, height: HEIGHT, backgroundColor: '#0f0f13', overflow: 'hidden' }}>
