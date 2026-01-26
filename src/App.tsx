@@ -1,115 +1,64 @@
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import Webcam from 'react-webcam';
-import { Camera } from '@mediapipe/camera_utils';
-import { Hands, type Results } from '@mediapipe/hands';
+import { type Results as HandResults } from '@mediapipe/hands';
+import { type Results as FaceResults } from '@mediapipe/face_mesh';
 import { drawCanvas } from './utils/drawCanvas';
+import { WIDTH, HEIGHT, MIRROR_X, FACE_LM } from './constants';
+import { poseFromHandLandmarks, poseFromFaceLandmarks } from './utils/trackingUtils';
+import { ControlPanel } from './components/ControlPanel';
+import { useMediaPipe } from './hooks/useMediaPipe';
+import { useThreeManager } from './hooks/useThreeManager';
 
-import * as THREE from 'three';
-import { vec3, mat3, quat } from 'gl-matrix';
-
-type LM = { x: number; y: number; z: number };
-
-const WIDTH = 1280;
-const HEIGHT = 720;
-const MIRROR_X = true;
-
-const HAND_LM = {
-	WRIST: 0,
-	INDEX_MCP: 5,
-	MIDDLE_MCP: 9,
-	MIDDLE_TIP: 12,
-	PINKY_MCP: 17,
-};
-
-function makeAxis(color: number, size: number, radius: number, axis: 'x' | 'y' | 'z') {
-	const group = new THREE.Object3D();
-	const shaftLen = size * 0.8;
-	const headLen = size * 0.2;
-	const material = new THREE.MeshBasicMaterial({ color });
-
-	const shaftGeo = new THREE.CylinderGeometry(radius, radius, shaftLen, 12);
-	const headGeo = new THREE.ConeGeometry(radius * 1.8, headLen, 12);
-
-	const shaft = new THREE.Mesh(shaftGeo, material);
-	shaft.position.y = shaftLen * 0.5;
-	group.add(shaft);
-
-	const head = new THREE.Mesh(headGeo, material);
-	head.position.y = shaftLen + headLen * 0.5;
-	group.add(head);
-
-	if (axis === 'x') group.rotation.z = -Math.PI / 2;
-	if (axis === 'z') group.rotation.x = Math.PI / 2;
-
-	return group;
-}
-
-function makeHandGizmo(size = 60) {
-	const root = new THREE.Object3D();
-	const radius = Math.max(1.5, size * 0.03);
-
-	root.add(makeAxis(0xff3333, size, radius, 'x'));
-	root.add(makeAxis(0x33ff33, size, radius, 'y'));
-	root.add(makeAxis(0x3333ff, size, radius, 'z'));
-
-	return root;
-}
-
-function poseFromHandLandmarks(lms: LM[], handedness?: string) {
-	const w = vec3.fromValues(lms[HAND_LM.WRIST].x, lms[HAND_LM.WRIST].y, lms[HAND_LM.WRIST].z);
-	const i = vec3.fromValues(lms[HAND_LM.INDEX_MCP].x, lms[HAND_LM.INDEX_MCP].y, lms[HAND_LM.INDEX_MCP].z);
-	const p = vec3.fromValues(lms[HAND_LM.PINKY_MCP].x, lms[HAND_LM.PINKY_MCP].y, lms[HAND_LM.PINKY_MCP].z);
-	const mm = vec3.fromValues(lms[HAND_LM.MIDDLE_MCP].x, lms[HAND_LM.MIDDLE_MCP].y, lms[HAND_LM.MIDDLE_MCP].z);
-
-	const vIndex = vec3.sub(vec3.create(), i, w);
-	const vPinky = vec3.sub(vec3.create(), p, w);
-	const nPalm = vec3.normalize(vec3.create(), vec3.cross(vec3.create(), vIndex, vPinky));
-
-	const z = vec3.normalize(vec3.create(), vec3.sub(vec3.create(), mm, w));
-	const isLeft = handedness === 'Left';
-	let xRaw = vec3.normalize(
-		vec3.create(),
-		isLeft ? vec3.sub(vec3.create(), p, i) : vec3.sub(vec3.create(), i, p),
-	);
-	const yBack = isLeft
-		? vec3.scale(vec3.create(), nPalm, -1)
-		: vec3.normalize(vec3.create(), nPalm);
-	let y = vec3.normalize(vec3.create(), vec3.cross(vec3.create(), z, xRaw));
-	if (vec3.dot(y, yBack) < 0) {
-		vec3.scale(xRaw, xRaw, -1);
-		y = vec3.normalize(vec3.create(), vec3.cross(vec3.create(), z, xRaw));
+declare global {
+	interface Window {
+		electronAPI: {
+			oscSend: (path: string, value: any) => void;
+		};
 	}
-	const x = vec3.normalize(vec3.create(), vec3.cross(vec3.create(), y, z));
-	const y2 = vec3.normalize(vec3.create(), vec3.cross(vec3.create(), z, x));
-
-	const rot = mat3.fromValues(
-		x[0], x[1], x[2],
-		y2[0], y2[1], y2[2],
-		z[0], z[1], z[2],
-	);
-	const q = quat.normalize(quat.create(), quat.fromMat3(quat.create(), rot));
-
-	return { position: w, quaternion: q };
 }
 
 function App() {
+	const [devices, setDevices] = useState<MediaDeviceInfo[]>([])
+	const [selectedDeviceId, setSelectedDeviceId] = useState<string>('')
+
 	const webcamRef = useRef<Webcam>(null)
 	const canvasRef = useRef<HTMLCanvasElement>(null)
 	const threeCanvasRef = useRef<HTMLCanvasElement>(null)
-	const resultsRef = useRef<any>(null)
+
+	const handResultsRef = useRef<HandResults | null>(null)
+	const faceResultsRef = useRef<FaceResults | null>(null)
 	const wsRef = useRef<WebSocket | null>(null)
-	const threeStateRef = useRef<{
-		renderer: THREE.WebGLRenderer;
-		scene: THREE.Scene;
-		camera: THREE.OrthographicCamera;
-		gizmos: THREE.Object3D[];
-	} | null>(null)
 
-	const onResults = useCallback((results: Results) => {
-		resultsRef.current = results
+	const threeStateRef = useThreeManager(threeCanvasRef.current)
 
-		const canvasCtx = canvasRef.current!.getContext('2d')!
-		drawCanvas(canvasCtx, results)
+	const formatVec = (v: number[]) => `[${v.map(n => n.toFixed(4)).join(',')}]`
+
+	const sendParam = (path: string, values: number[]) => {
+		const ws = wsRef.current
+		if (ws && ws.readyState === WebSocket.OPEN) {
+			ws.send(`${path} [${values.join(';')}]`)
+		}
+
+		// Send OSC via Electron
+		if (window.electronAPI) {
+			if (path.includes('Rotation')) {
+				// Hand and Face rotation paths contain 'Rotation'
+				window.electronAPI.oscSend(path, formatVec(values))
+			} else if (path.includes('Position')) {
+				window.electronAPI.oscSend(path, formatVec(values))
+			} else {
+				// Fallback or other params
+				window.electronAPI.oscSend(path, values.length === 1 ? values[0] : formatVec(values))
+			}
+		}
+	}
+
+	const onHandResults = useCallback((results: HandResults) => {
+		handResultsRef.current = results
+		const canvasCtx = canvasRef.current?.getContext('2d')
+		if (canvasCtx) {
+			drawCanvas(canvasCtx, results, faceResultsRef.current || undefined)
+		}
 
 		const st = threeStateRef.current
 		if (!st) return
@@ -118,20 +67,23 @@ function App() {
 		const hands3d = results.multiHandWorldLandmarks ?? []
 		const handedness = results.multiHandedness ?? []
 
-		const ws = wsRef.current
-		const sendParam = (path: string, values: number[]) => {
-			if (!ws || ws.readyState !== WebSocket.OPEN) return
-			ws.send(`${path} [${values.join(';')}]`)
-		}
+		const detectedHands = new Set<string>();
 
-		for (let hi = 0; hi < st.gizmos.length; hi++) {
-			const gizmo = st.gizmos[hi]
+		for (let hi = 0; hi < st.handGizmos.length; hi++) {
+			const gizmo = st.handGizmos[hi]
 			const lm2d = hands2d[hi]
+			const rawLabel = handedness[hi]?.label
+			const label = MIRROR_X
+				? (rawLabel === 'Left' ? 'Right' : rawLabel === 'Right' ? 'Left' : rawLabel)
+				: rawLabel
+			const suffix = label === 'Left' ? 'L' : label === 'Right' ? 'R' : (hi === 0 ? 'L' : 'R')
+
 			if (!lm2d) {
 				gizmo.visible = false
 				continue
 			}
 			gizmo.visible = true
+			detectedHands.add(suffix);
 
 			const wrist2d = lm2d[0]
 			const x = (MIRROR_X ? 1 - wrist2d.x : wrist2d.x) * WIDTH
@@ -141,30 +93,101 @@ function App() {
 
 			const lmForRot = hands3d[hi]?.map(p => ({ x: p.x, y: p.y, z: p.z }))
 				?? lm2d.map(p => ({ x: p.x, y: p.y, z: p.z }))
-			const rawLabel = handedness[hi]?.label
-			const label = MIRROR_X
-				? (rawLabel === 'Left' ? 'Right' : rawLabel === 'Right' ? 'Left' : rawLabel)
-				: rawLabel
 			const rotLabel = label ?? (hi === 0 ? 'Left' : 'Right')
+
 			const { quaternion } = poseFromHandLandmarks(lmForRot, rotLabel)
 			gizmo.quaternion.set(quaternion[0], quaternion[1], quaternion[2], quaternion[3])
-			const suffix = label === 'Left' ? 'L' : label === 'Right' ? 'R' : (hi === 0 ? 'L' : 'R')
+
 			const positionPath = `/avatar/parameters/Hand.${suffix}.Position`
 			const rotationPath = `/avatar/parameters/Hand.${suffix}.Rotation`
+			const detectedPath = `/avatar/parameters/Hand.${suffix}.Detected`
 
 			const normX = MIRROR_X ? 1 - wrist2d.x : wrist2d.x
 			const normY = 1 - wrist2d.y
 			const normZ = wrist2d.z
 			sendParam(positionPath, [normX, normY, normZ])
-			sendParam(rotationPath, [
-				gizmo.quaternion.x,
-				gizmo.quaternion.y,
-				gizmo.quaternion.z,
-				gizmo.quaternion.w,
-			])
+			sendParam(rotationPath, [quaternion[0], quaternion[1], quaternion[2], quaternion[3]])
+			sendParam(detectedPath, [1, 0, 0]) // Detected
 		}
-	}, [])
 
+		// Send not detected for L/R if they weren't in the loop
+		['L', 'R'].forEach(s => {
+			if (!detectedHands.has(s)) {
+				sendParam(`/avatar/parameters/Hand.${s}.Detected`, [0, 0, 0])
+			}
+		})
+	}, [threeStateRef])
+
+	const onFaceResults = useCallback((results: FaceResults) => {
+		faceResultsRef.current = results
+		const canvasCtx = canvasRef.current?.getContext('2d')
+		if (canvasCtx) {
+			drawCanvas(canvasCtx, handResultsRef.current || undefined, results)
+		}
+
+		const st = threeStateRef.current
+		if (!st) return
+
+		if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
+			const lms = results.multiFaceLandmarks[0]
+			st.faceGizmo.visible = true
+
+			const nose2d = lms[FACE_LM.NOSE]
+			const x = (MIRROR_X ? 1 - nose2d.x : nose2d.x) * WIDTH
+			const y = (1 - nose2d.y) * HEIGHT
+			const z = -nose2d.z * 300
+			st.faceGizmo.position.set(x, y, z)
+
+			const { quaternion } = poseFromFaceLandmarks(lms)
+			st.faceGizmo.quaternion.set(quaternion[0], quaternion[1], quaternion[2], quaternion[3])
+
+			const normX = MIRROR_X ? 1 - nose2d.x : nose2d.x
+			const normY = 1 - nose2d.y
+			const normZ = nose2d.z
+
+			sendParam('/avatar/parameters/Face.Position', [normX, normY, normZ])
+			sendParam('/avatar/parameters/Face.Rotation', [quaternion[0], quaternion[1], quaternion[2], quaternion[3]])
+
+			// Requested paths
+			sendParam('Head.Rotation', [quaternion[0], quaternion[1], quaternion[2], quaternion[3]])
+
+			// MouthOpen calculation
+			const upper = lms[FACE_LM.LIP_UPPER]
+			const lower = lms[FACE_LM.LIP_LOWER]
+			const mouthOpen = Math.max(0, (lower.y - upper.y) * 10) // Approx 0.0 to 1.0
+			sendParam('/avatar/parameters/MouthOpen', [mouthOpen])
+
+		} else {
+			st.faceGizmo.visible = false
+			// Optional: send default values when face is lost
+			sendParam('/avatar/parameters/MouthOpen', [0])
+		}
+	}, [threeStateRef])
+
+	// Camera setup
+	useEffect(() => {
+		const updateDevices = async () => {
+			const deviceInfos = await navigator.mediaDevices.enumerateDevices()
+			const videoDevices = deviceInfos.filter(d => d.kind === 'videoinput')
+			setDevices(videoDevices)
+			if (videoDevices.length > 0 && !selectedDeviceId) {
+				setSelectedDeviceId(videoDevices[0].deviceId)
+			}
+		}
+		updateDevices()
+		navigator.mediaDevices.addEventListener('devicechange', updateDevices)
+		return () => navigator.mediaDevices.removeEventListener('devicechange', updateDevices)
+	}, [selectedDeviceId])
+
+	// MediaPipe setup
+	useMediaPipe(
+		webcamRef.current?.video || null,
+		onHandResults,
+		onFaceResults,
+		selectedDeviceId
+	)
+
+	// WebSocket setup
 	useEffect(() => {
 		const ws = new WebSocket('ws://localhost:3456')
 		wsRef.current = ws
@@ -174,116 +197,33 @@ function App() {
 		}
 	}, [])
 
-	useEffect(() => {
-		const canvas = threeCanvasRef.current
-		if (!canvas) return
-
-		const renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true })
-		renderer.setSize(WIDTH, HEIGHT, false)
-		renderer.setPixelRatio(window.devicePixelRatio)
-
-		const scene = new THREE.Scene()
-		const camera = new THREE.OrthographicCamera(0, WIDTH, HEIGHT, 0, -1000, 1000)
-		camera.position.z = 10
-
-		const gizmos = [makeHandGizmo(60), makeHandGizmo(60)]
-		gizmos.forEach(g => {
-			g.visible = false
-			scene.add(g)
-		})
-
-		threeStateRef.current = { renderer, scene, camera, gizmos }
-
-		let raf = 0
-		const tick = () => {
-			raf = requestAnimationFrame(tick)
-			renderer.render(scene, camera)
-		}
-		tick()
-
-		return () => {
-			cancelAnimationFrame(raf)
-			renderer.dispose()
-			threeStateRef.current = null
-		}
-	}, [])
-
-	useEffect(() => {
-		const hands = new Hands({
-			locateFile: file => {
-				return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
-			}
-		})
-
-		hands.setOptions({
-			maxNumHands: 2,
-			modelComplexity: 1,
-			minDetectionConfidence: 0.5,
-			minTrackingConfidence: 0.5
-		})
-
-		hands.onResults(onResults)
-
-		if (typeof webcamRef.current !== 'undefined' && webcamRef.current !== null) {
-			const camera = new Camera(webcamRef.current.video!, {
-				onFrame: async () => {
-					await hands.send({ image: webcamRef.current!.video! })
-				},
-				width: 1280,
-				height: 720
-			})
-			camera.start()
-		}
-	}, [onResults])
-
-	const videoConstraints = {
-		width: WIDTH,
-		height: HEIGHT,
-		facingMode: 'user'
-	}
-
 	return (
-		<div
-            style={{
-                position: 'relative',
-                width: `${WIDTH}px`,
-                height: `${HEIGHT}px`,
-            }}
-        >
-			{/* capture */}
+		<div className="app-container" style={{ position: 'relative', width: WIDTH, height: HEIGHT, backgroundColor: '#0f0f13', overflow: 'hidden' }}>
 			<Webcam
 				audio={false}
-				style={{ 
-                    visibility: 'hidden',
-                    position: 'absolute',
-                }}
+				style={{ visibility: 'hidden', position: 'absolute' }}
 				width={WIDTH}
 				height={HEIGHT}
 				ref={webcamRef}
-				screenshotFormat="image/jpeg"
-				videoConstraints={videoConstraints}
+				videoConstraints={{ width: WIDTH, height: HEIGHT, deviceId: selectedDeviceId ? { exact: selectedDeviceId } : undefined }}
 			/>
-			<canvas 
-                ref={canvasRef} 
+			<canvas
+				ref={canvasRef}
 				width={WIDTH}
 				height={HEIGHT}
-                style={{
-                    position: 'absolute',
-                    width: `${WIDTH}px`,
-                    height: `${HEIGHT}px`,
-                    backgroundColor: '#fff',
-                }}
-            />
+				style={{ position: 'absolute', width: WIDTH, height: HEIGHT, backgroundColor: '#16161a' }}
+			/>
 			<canvas
 				ref={threeCanvasRef}
 				width={WIDTH}
 				height={HEIGHT}
-				style={{
-					position: 'absolute',
-					width: `${WIDTH}px`,
-					height: `${HEIGHT}px`,
-					pointerEvents: 'none',
-				}}
+				style={{ position: 'absolute', width: WIDTH, height: HEIGHT, pointerEvents: 'none' }}
+			/>
+
+			<ControlPanel
+				devices={devices}
+				selectedDeviceId={selectedDeviceId}
+				onDeviceChange={setSelectedDeviceId}
 			/>
 		</div>
 	)
