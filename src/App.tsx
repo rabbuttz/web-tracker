@@ -82,7 +82,7 @@ function App() {
 				: rawLabel
 			const suffix = label === 'Left' ? 'L' : label === 'Right' ? 'R' : (hi === 0 ? 'L' : 'R')
 
-			if (!lm2d) {
+			if (!lm2d || lm2d.length === 0 || !lm2d[0]) {
 				gizmo.visible = false
 				continue
 			}

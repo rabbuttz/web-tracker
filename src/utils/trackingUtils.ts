@@ -64,12 +64,8 @@ export function poseFromHandLandmarks(lms: LM[], handedness?: string) {
         y_palm = vec3.normalize(vec3.create(), vec3.cross(vec3.create(), z_up, x_left_raw));
     }
 
-    const x_left = vec3.normalize(vec3.create(), vec3.cross(vec3.create(), y_palm, z_up));
-    const y_forward = vec3.normalize(vec3.create(), vec3.cross(vec3.create(), x_left, z_up));
-
-    // Left-handed coordinate system with Z up: X=right, Y=forward, Z=up
-    const x = vec3.scale(vec3.create(), x_left, -1);
-    const y = y_forward;
+    const x = vec3.normalize(vec3.create(), vec3.cross(vec3.create(), y_palm, z_up));
+    const y = vec3.normalize(vec3.create(), vec3.cross(vec3.create(), z_up, x));
     const z = z_up;
 
     const rot = mat3.fromValues(

@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(powershell -Command \"Get-Content ''c:\\\\Users\\\\Rabbuttz\\\\dev\\\\Tracking-totegamma\\\\web-tracker\\\\src\\\\App.tsx'' | Select-Object -Skip 80 -First 20\")"
+    ]
+  }
+}
