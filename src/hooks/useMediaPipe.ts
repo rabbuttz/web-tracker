@@ -1,7 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { Hands, type Results as HandResults } from '@mediapipe/hands';
 import { FaceMesh, type Results as FaceResults } from '@mediapipe/face_mesh';
-import { WIDTH, HEIGHT } from '../constants';
 
 export function useMediaPipe(
     videoElement: HTMLVideoElement | null,
@@ -45,23 +44,30 @@ export function useMediaPipe(
             faceMeshRef.current = faceMesh;
         }, 1000);
 
-        let rafId: number;
+        let timerId: ReturnType<typeof setTimeout>;
+        let isRunning = true;
         const processFrame = async () => {
+            if (!isRunning) return;
             if (videoElement && videoElement.readyState >= 2) {
                 await hands.send({ image: videoElement });
                 if (faceMeshRef.current) {
                     await faceMeshRef.current.send({ image: videoElement });
                 }
             }
-            rafId = requestAnimationFrame(processFrame);
+            timerId = setTimeout(processFrame, 1000 / 30); // 30fps
         };
-        rafId = requestAnimationFrame(processFrame);
+        processFrame();
 
         return () => {
+            isRunning = false;
             clearTimeout(faceMeshTimer);
-            cancelAnimationFrame(rafId);
+            clearTimeout(timerId);
             hands.close();
-            if (faceMeshRef.current) faceMeshRef.current.close();
+            handsRef.current = null;
+            if (faceMeshRef.current) {
+                faceMeshRef.current.close();
+                faceMeshRef.current = null;
+            }
         };
     }, [videoElement, onHandResults, onFaceResults, deviceId]);
 }

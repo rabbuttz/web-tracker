@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import Webcam from 'react-webcam';
 import { type Results as HandResults } from '@mediapipe/hands';
 import { type Results as FaceResults } from '@mediapipe/face_mesh';
+import { quat, vec3 } from 'gl-matrix';
 import { drawCanvas } from './utils/drawCanvas';
 import { WIDTH, HEIGHT, MIRROR_X, FACE_LM } from './constants';
 import { poseFromHandLandmarks, poseFromFaceLandmarks } from './utils/trackingUtils';
@@ -27,10 +28,22 @@ function App() {
 
 	const handResultsRef = useRef<HandResults | null>(null)
 	const faceResultsRef = useRef<FaceResults | null>(null)
+	const headPoseRef = useRef<{ position: vec3; quaternion: quat } | null>(null)
+	const calibrationRef = useRef<{ position: vec3; quaternion: quat } | null>(null)
+	const rawHeadPoseRef = useRef<{ position: vec3; quaternion: quat } | null>(null)
 
 	const threeStateRef = useThreeManager(threeCanvasRef.current)
 
 	const formatVec = (v: number[]) => `[${v.map(n => n.toFixed(4)).join(';')}]`
+
+	const handleCalibrate = useCallback(() => {
+		if (rawHeadPoseRef.current) {
+			calibrationRef.current = {
+				position: vec3.clone(rawHeadPoseRef.current.position),
+				quaternion: quat.clone(rawHeadPoseRef.current.quaternion)
+			}
+		}
+	}, [])
 
 	const sendParam = (path: string, values: number[]) => {
 		if (window.electronAPI) {
@@ -96,15 +109,25 @@ function App() {
 			const normX = MIRROR_X ? 1 - wrist2d.x : wrist2d.x
 			const normY = 1 - wrist2d.y
 			const normZ = wrist2d.z
-			sendParam(positionPath, [normX, normY, normZ])
+
+			// Calculate head-relative position (position offset only, no rotation)
+			const headPose = headPoseRef.current
+			if (headPose) {
+				const relX = normX - headPose.position[0]
+				const relY = normY - headPose.position[1]
+				const relZ = normZ - headPose.position[2]
+				sendParam(positionPath, [relX, relY, relZ])
+			} else {
+				sendParam(positionPath, [normX, normY, normZ])
+			}
 			sendParam(rotationPath, [quaternion[0], quaternion[1], quaternion[2], quaternion[3]])
-			sendParam(detectedPath, [1, 0, 0]) // Detected
+			sendParam(detectedPath, [1]) // Detected
 		}
 
 		// Send not detected for L/R if they weren't in the loop
 		['L', 'R'].forEach(s => {
 			if (!detectedHands.has(s)) {
-				sendParam(`/avatar/parameters/Hand.${s}.Detected`, [0, 0, 0])
+				sendParam(`/avatar/parameters/Hand.${s}.Detected`, [0])
 			}
 		})
 	}, [threeStateRef])
@@ -135,18 +158,40 @@ function App() {
 			const normY = 1 - nose2d.y
 			const normZ = nose2d.z
 
-			sendParam('/avatar/parameters/Head.Position', [normX, normY, normZ])
-			sendParam('/avatar/parameters/Head.Rotation', [quaternion[0], quaternion[1], quaternion[2], quaternion[3]])
-			sendParam('Head.Rotation', [quaternion[0], quaternion[1], quaternion[2], quaternion[3]])
+			const rawPos = vec3.fromValues(normX, normY, normZ)
+			const rawQuat = quat.fromValues(quaternion[0], quaternion[1], quaternion[2], quaternion[3])
+
+			// Store raw head pose for calibration
+			rawHeadPoseRef.current = { position: rawPos, quaternion: rawQuat }
+
+			// Store head pose for hand relative calculations
+			headPoseRef.current = { position: vec3.clone(rawPos), quaternion: quat.clone(rawQuat) }
+
+			// Apply calibration offset
+			let outPos = rawPos
+			let outQuat = rawQuat
+			if (calibrationRef.current) {
+				outPos = vec3.sub(vec3.create(), rawPos, calibrationRef.current.position)
+				const calibQuatInv = quat.invert(quat.create(), calibrationRef.current.quaternion)
+				outQuat = quat.multiply(quat.create(), calibQuatInv, rawQuat)
+				quat.normalize(outQuat, outQuat)
+			}
+
+			sendParam('/avatar/parameters/Head.Position', [outPos[0], outPos[1], outPos[2]])
+			sendParam('/avatar/parameters/Head.Rotation', [outQuat[0], outQuat[1], outQuat[2], outQuat[3]])
+			sendParam('Head.Rotation', [outQuat[0], outQuat[1], outQuat[2], outQuat[3]])
 
 			// MouthOpen calculation
 			const upper = lms[FACE_LM.LIP_UPPER]
 			const lower = lms[FACE_LM.LIP_LOWER]
 			const mouthOpen = Math.max(0, (lower.y - upper.y) * 10) // Approx 0.0 to 1.0
 			sendParam('/avatar/parameters/MouthOpen', [mouthOpen])
+			sendParam('/avatar/parameters/Head.Detected', [1])
 
 		} else {
 			st.faceGizmo.visible = false
+			sendParam('/avatar/parameters/Head.Detected', [0])
+			sendParam('/avatar/parameters/MouthOpen', [0])
 		}
 	}, [threeStateRef])
 
@@ -201,6 +246,7 @@ function App() {
 				devices={devices}
 				selectedDeviceId={selectedDeviceId}
 				onDeviceChange={setSelectedDeviceId}
+				onCalibrate={handleCalibrate}
 			/>
 		</div>
 	)

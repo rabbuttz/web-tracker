@@ -4,12 +4,14 @@ interface ControlPanelProps {
     devices: MediaDeviceInfo[];
     selectedDeviceId: string;
     onDeviceChange: (deviceId: string) => void;
+    onCalibrate: () => void;
 }
 
 export const ControlPanel: React.FC<ControlPanelProps> = ({
     devices,
     selectedDeviceId,
     onDeviceChange,
+    onCalibrate,
 }) => {
     return (
         <div className="controls-panel">
@@ -27,6 +29,12 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
                         </option>
                     ))}
                 </select>
+            </div>
+
+            <div className="control-group">
+                <button className="glass-button" onClick={onCalibrate}>
+                    Calibrate
+                </button>
             </div>
 
             <style>{`
@@ -75,6 +83,24 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
 				.glass-select option {
 					background: #1a1a1f;
 					color: white;
+				}
+				.glass-button {
+					background: rgba(60, 100, 180, 0.5);
+					border: 1px solid rgba(100, 150, 255, 0.3);
+					border-radius: 6px;
+					padding: 10px 16px;
+					color: white;
+					font-size: 14px;
+					font-weight: 600;
+					cursor: pointer;
+					transition: all 0.2s ease;
+				}
+				.glass-button:hover {
+					background: rgba(80, 120, 200, 0.7);
+					border-color: rgba(100, 150, 255, 0.5);
+				}
+				.glass-button:active {
+					transform: scale(0.98);
 				}
 			`}</style>
         </div>
