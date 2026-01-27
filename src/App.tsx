@@ -123,15 +123,14 @@ function App() {
 			const lms = results.multiFaceLandmarks[0]
 			st.faceGizmo.visible = true
 
-			const nose2d = lms[FACE_LM.NOSE]
-			const x = (MIRROR_X ? 1 - nose2d.x : nose2d.x) * WIDTH
-			const y = (1 - nose2d.y) * HEIGHT
-			const z = -nose2d.z * 300
-			st.faceGizmo.position.set(x, y, z)
-
-			const { quaternion } = poseFromFaceLandmarks(lms)
+			const { position, quaternion } = poseFromFaceLandmarks(lms)
+			const gizmoX = (MIRROR_X ? 1 - position[0] : position[0]) * WIDTH
+			const gizmoY = (1 - position[1]) * HEIGHT
+			const gizmoZ = -position[2] * 300
+			st.faceGizmo.position.set(gizmoX, gizmoY, gizmoZ)
 			st.faceGizmo.quaternion.set(quaternion[0], quaternion[1], quaternion[2], quaternion[3])
 
+			const nose2d = lms[FACE_LM.NOSE]
 			const normX = MIRROR_X ? 1 - nose2d.x : nose2d.x
 			const normY = 1 - nose2d.y
 			const normZ = nose2d.z

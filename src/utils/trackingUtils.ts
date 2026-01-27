@@ -48,44 +48,29 @@ export function poseFromHandLandmarks(lms: LM[], handedness?: string) {
     const vPinky = vec3.sub(vec3.create(), p, w);
     const nPalm = vec3.normalize(vec3.create(), vec3.cross(vec3.create(), vIndex, vPinky));
 
-    const z = vec3.normalize(vec3.create(), vec3.sub(vec3.create(), mm, w));
+    const z_up = vec3.normalize(vec3.create(), vec3.sub(vec3.create(), mm, w));
     const isLeft = handedness === 'Left';
-    let xRaw = vec3.normalize(
+    let x_left_raw = vec3.normalize(
         vec3.create(),
         isLeft ? vec3.sub(vec3.create(), p, i) : vec3.sub(vec3.create(), i, p),
     );
-    const yBack = isLeft
+    const y_palm_hint = isLeft
         ? vec3.scale(vec3.create(), nPalm, -1)
         : vec3.normalize(vec3.create(), nPalm);
-    let y = vec3.normalize(vec3.create(), vec3.cross(vec3.create(), z, xRaw));
-    if (vec3.dot(y, yBack) < 0) {
-        vec3.scale(xRaw, xRaw, -1);
-        y = vec3.normalize(vec3.create(), vec3.cross(vec3.create(), z, xRaw));
+
+    let y_palm = vec3.normalize(vec3.create(), vec3.cross(vec3.create(), z_up, x_left_raw));
+    if (vec3.dot(y_palm, y_palm_hint) < 0) {
+        vec3.scale(x_left_raw, x_left_raw, -1);
+        y_palm = vec3.normalize(vec3.create(), vec3.cross(vec3.create(), z_up, x_left_raw));
     }
-    const x = vec3.normalize(vec3.create(), vec3.cross(vec3.create(), y, z));
-    const y2 = vec3.normalize(vec3.create(), vec3.cross(vec3.create(), z, x));
 
-    const rot = mat3.fromValues(
-        x[0], x[1], x[2],
-        y2[0], y2[1], y2[2],
-        z[0], z[1], z[2],
-    );
-    const q = quat.normalize(quat.create(), quat.fromMat3(quat.create(), rot));
+    const x_left = vec3.normalize(vec3.create(), vec3.cross(vec3.create(), y_palm, z_up));
+    const y_forward = vec3.normalize(vec3.create(), vec3.cross(vec3.create(), x_left, z_up));
 
-    return { position: w, quaternion: q };
-}
-
-export function poseFromFaceLandmarks(lms: LM[]) {
-    const nose = vec3.fromValues(lms[FACE_LM.NOSE].x, lms[FACE_LM.NOSE].y, lms[FACE_LM.NOSE].z);
-    const forehead = vec3.fromValues(lms[FACE_LM.FOREHEAD].x, lms[FACE_LM.FOREHEAD].y, lms[FACE_LM.FOREHEAD].z);
-    const chin = vec3.fromValues(lms[FACE_LM.CHIN].x, lms[FACE_LM.CHIN].y, lms[FACE_LM.CHIN].z);
-    const leftEye = vec3.fromValues(lms[FACE_LM.LEFT_EYE_CORNER].x, lms[FACE_LM.LEFT_EYE_CORNER].y, lms[FACE_LM.LEFT_EYE_CORNER].z);
-    const rightEye = vec3.fromValues(lms[FACE_LM.RIGHT_EYE_CORNER].x, lms[FACE_LM.RIGHT_EYE_CORNER].y, lms[FACE_LM.RIGHT_EYE_CORNER].z);
-
-    const y = vec3.normalize(vec3.create(), vec3.sub(vec3.create(), forehead, chin));
-    const xRaw = vec3.normalize(vec3.create(), vec3.sub(vec3.create(), leftEye, rightEye));
-    const z = vec3.normalize(vec3.create(), vec3.cross(vec3.create(), xRaw, y));
-    const x = vec3.normalize(vec3.create(), vec3.cross(vec3.create(), y, z));
+    // Left-handed coordinate system with Z up: X=right, Y=forward, Z=up
+    const x = vec3.scale(vec3.create(), x_left, -1);
+    const y = y_forward;
+    const z = z_up;
 
     const rot = mat3.fromValues(
         x[0], x[1], x[2],
@@ -94,5 +79,39 @@ export function poseFromFaceLandmarks(lms: LM[]) {
     );
     const q = quat.normalize(quat.create(), quat.fromMat3(quat.create(), rot));
 
-    return { position: nose, quaternion: q };
+    return { position: w, quaternion: q };
+}
+
+export function poseFromFaceLandmarks(lms: LM[]) {
+    const forehead = vec3.fromValues(lms[FACE_LM.FOREHEAD].x, lms[FACE_LM.FOREHEAD].y, lms[FACE_LM.FOREHEAD].z);
+    const chin = vec3.fromValues(lms[FACE_LM.CHIN].x, lms[FACE_LM.CHIN].y, lms[FACE_LM.CHIN].z);
+    const leftEye = vec3.fromValues(lms[FACE_LM.LEFT_EYE_CORNER].x, lms[FACE_LM.LEFT_EYE_CORNER].y, lms[FACE_LM.LEFT_EYE_CORNER].z);
+    const rightEye = vec3.fromValues(lms[FACE_LM.RIGHT_EYE_CORNER].x, lms[FACE_LM.RIGHT_EYE_CORNER].y, lms[FACE_LM.RIGHT_EYE_CORNER].z);
+
+    const y_up = vec3.normalize(vec3.create(), vec3.sub(vec3.create(), forehead, chin));
+    const x_left_raw = vec3.normalize(vec3.create(), vec3.sub(vec3.create(), leftEye, rightEye));
+    const z_fwd = vec3.normalize(vec3.create(), vec3.cross(vec3.create(), x_left_raw, y_up));
+    const x_left = vec3.normalize(vec3.create(), vec3.cross(vec3.create(), y_up, z_fwd));
+
+    // Left-handed coordinate system with Z up: X=right, Y=forward, Z=up
+    const x = vec3.scale(vec3.create(), x_left, -1);
+    const y = z_fwd;
+    const z = y_up;
+
+    // Calculate neck base position (head-neck junction)
+    const faceHeight = vec3.distance(forehead, chin);
+    const neckBase = vec3.clone(chin);
+    // Move backward (z_fwd points backward in MediaPipe space)
+    vec3.scaleAndAdd(neckBase, neckBase, z_fwd, faceHeight * 0.5);
+    // Move down slightly below chin (Y is inverted in screen space)
+    vec3.scaleAndAdd(neckBase, neckBase, y_up, faceHeight * 0.15);
+
+    const rot = mat3.fromValues(
+        x[0], x[1], x[2],
+        y[0], y[1], y[2],
+        z[0], z[1], z[2],
+    );
+    const q = quat.normalize(quat.create(), quat.fromMat3(quat.create(), rot));
+
+    return { position: neckBase, quaternion: q };
 }
