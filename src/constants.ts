@@ -18,4 +18,8 @@ export const FACE_LM = {
     RIGHT_EYE_CORNER: 263,
     LIP_UPPER: 13,
     LIP_LOWER: 14,
+    MOUTH_LEFT: 61,
+    MOUTH_RIGHT: 291,
+    LIP_OUTER_UPPER: 11,
+    LIP_OUTER_LOWER: 17,
 };
