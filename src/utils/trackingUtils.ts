@@ -50,18 +50,20 @@ export function poseFromHandLandmarks(lms: LM[], handedness?: string) {
 
     const z_up = vec3.normalize(vec3.create(), vec3.sub(vec3.create(), mm, w));
     const isLeft = handedness === 'Left';
-    let x_left_raw = vec3.normalize(
+    const x_left_raw = vec3.normalize(
         vec3.create(),
         isLeft ? vec3.sub(vec3.create(), p, i) : vec3.sub(vec3.create(), i, p),
     );
+    // eslint-disable-next-line prefer-const
+    let x_left = vec3.clone(x_left_raw);
     const y_palm_hint = isLeft
         ? vec3.scale(vec3.create(), nPalm, -1)
         : vec3.normalize(vec3.create(), nPalm);
 
-    let y_palm = vec3.normalize(vec3.create(), vec3.cross(vec3.create(), z_up, x_left_raw));
+    let y_palm = vec3.normalize(vec3.create(), vec3.cross(vec3.create(), z_up, x_left));
     if (vec3.dot(y_palm, y_palm_hint) < 0) {
-        vec3.scale(x_left_raw, x_left_raw, -1);
-        y_palm = vec3.normalize(vec3.create(), vec3.cross(vec3.create(), z_up, x_left_raw));
+        vec3.scale(x_left, x_left, -1);
+        y_palm = vec3.normalize(vec3.create(), vec3.cross(vec3.create(), z_up, x_left));
     }
 
     const x = vec3.normalize(vec3.create(), vec3.cross(vec3.create(), y_palm, z_up));

@@ -18,6 +18,9 @@ interface ControlPanelProps {
         E: number;
         oh: number;
     } | null;
+    blendshapeDebug: { name: string; value: number }[] | null;
+    expressionMode: 'viseme' | 'visemeBlendshape' | 'blendshape';
+    onSetMode: (mode: 'viseme' | 'visemeBlendshape' | 'blendshape') => void;
 }
 
 export const ControlPanel: React.FC<ControlPanelProps> = ({
@@ -30,6 +33,9 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
     onSetupFaceTrack,
     setupStatus,
     mouthDebug,
+    blendshapeDebug,
+    expressionMode,
+    onSetMode,
 }) => {
     const [username, setUsername] = useState('Rabbuttz');
     const [port, setPort] = useState('40160');
@@ -107,9 +113,40 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
                 </button>
             </div>
 
-            {mouthDebug && (
+            <div className="control-group">
+                <label>Expression Mode</label>
+                <div className="mode-toggle-container">
+                    <div className="mode-button-group">
+                        <button 
+                            className={`mode-button ${expressionMode === 'viseme' ? 'active' : ''}`}
+                            onClick={() => expressionMode !== 'viseme' && onSetMode('viseme')}
+                        >
+                            Viseme (Legacy)
+                        </button>
+                        <button 
+                            className={`mode-button ${expressionMode === 'visemeBlendshape' ? 'active' : ''}`}
+                            onClick={() => expressionMode !== 'visemeBlendshape' && onSetMode('visemeBlendshape')}
+                        >
+                            Viseme (BS)
+                        </button>
+                        <button 
+                            className={`mode-button ${expressionMode === 'blendshape' ? 'active' : ''}`}
+                            onClick={() => expressionMode !== 'blendshape' && onSetMode('blendshape')}
+                        >
+                            Perfect Sync
+                        </button>
+                    </div>
+                </div>
+                <div className="mode-description">
+                    {expressionMode === 'viseme' && 'Landmark-based aiueo calculation'}
+                    {expressionMode === 'visemeBlendshape' && 'Blendshape-based aiueo calculation'}
+                    {expressionMode === 'blendshape' && 'Direct blendshape parameters'}
+                </div>
+            </div>
+
+            {(expressionMode === 'viseme' || expressionMode === 'visemeBlendshape') && mouthDebug && (
                 <div className="control-group debug-section">
-                    <label>Mouth Debug (あいうえお)</label>
+                    <label>Mouth Debug (あいうえお) - {expressionMode === 'viseme' ? 'Legacy' : 'Blendshape'}</label>
                     <div className="debug-grid">
                         <div className="debug-item">
                             <span className="debug-label">Height:</span>
@@ -139,6 +176,20 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
                             <span className="debug-label">お (oh):</span>
                             <span className="debug-value">{mouthDebug.oh.toFixed(3)}</span>
                         </div>
+                    </div>
+                </div>
+            )}
+
+            {expressionMode === 'blendshape' && blendshapeDebug && blendshapeDebug.length > 0 && (
+                <div className="control-group debug-section">
+                    <label>Blendshapes ({blendshapeDebug.length})</label>
+                    <div className="debug-grid blendshape-grid">
+                        {blendshapeDebug.map((bs, index) => (
+                            <div key={index} className="debug-item blendshape">
+                                <span className="debug-label">{bs.name}:</span>
+                                <span className="debug-value">{bs.value.toFixed(3)}</span>
+                            </div>
+                        ))}
                     </div>
                 </div>
             )}
@@ -248,6 +299,48 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
 					background: rgba(120, 80, 200, 0.7);
 					border-color: rgba(150, 100, 255, 0.5);
 				}
+				.toggle-container {
+					display: flex;
+					align-items: center;
+					gap: 12px;
+				}
+				.toggle-label {
+					font-size: 12px;
+					color: #888;
+					transition: color 0.3s ease;
+				}
+				.toggle-label.active {
+					color: #fff;
+					font-weight: 600;
+				}
+				.toggle-switch {
+					width: 50px;
+					height: 26px;
+					background: rgba(60, 100, 180, 0.5);
+					border-radius: 13px;
+					position: relative;
+					cursor: pointer;
+					transition: background 0.3s ease;
+					border: 1px solid rgba(100, 150, 255, 0.3);
+				}
+				.toggle-switch.blendshapes {
+					background: rgba(60, 180, 120, 0.6);
+					border-color: rgba(100, 255, 150, 0.4);
+				}
+				.toggle-slider {
+					width: 22px;
+					height: 22px;
+					background: white;
+					border-radius: 50%;
+					position: absolute;
+					top: 1px;
+					left: 2px;
+					transition: transform 0.3s ease;
+					box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+				}
+				.toggle-switch.blendshapes .toggle-slider {
+					transform: translateX(24px);
+				}
 				.debug-section {
 					margin-top: 12px;
 					padding-top: 12px;
@@ -267,9 +360,55 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
 					border-radius: 4px;
 					font-size: 11px;
 				}
-				.debug-item.viseme {
-					background: rgba(100, 60, 180, 0.2);
-				}
+			.debug-item.viseme {
+				background: rgba(100, 60, 180, 0.2);
+			}
+			.blendshape-grid {
+				max-height: 200px;
+				overflow-y: auto;
+			}
+			.debug-item.blendshape {
+				background: rgba(60, 180, 120, 0.2);
+			}
+			.mode-toggle-container {
+				margin-top: 8px;
+			}
+			.mode-button-group {
+				display: flex;
+				gap: 4px;
+				flex-wrap: wrap;
+			}
+			.mode-button {
+				flex: 1;
+				min-width: 80px;
+				background: rgba(40, 40, 50, 0.6);
+				border: 1px solid rgba(255, 255, 255, 0.1);
+				border-radius: 6px;
+				padding: 8px 6px;
+				color: #888;
+				font-size: 11px;
+				font-weight: 500;
+				cursor: pointer;
+				transition: all 0.2s ease;
+			}
+			.mode-button:hover {
+				background: rgba(60, 100, 180, 0.4);
+				border-color: rgba(100, 150, 255, 0.3);
+				color: #ccc;
+			}
+			.mode-button.active {
+				background: rgba(100, 60, 180, 0.6);
+				border-color: rgba(150, 100, 255, 0.5);
+				color: #fff;
+				font-weight: 600;
+			}
+			.mode-description {
+				margin-top: 6px;
+				font-size: 10px;
+				color: #666;
+				font-style: italic;
+				text-align: center;
+			}
 				.debug-label {
 					color: #aaa;
 					font-weight: 500;
