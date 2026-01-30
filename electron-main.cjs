@@ -64,24 +64,49 @@ app.whenReady().then(() => {
     });
 });
 
-app.on('window-all-closed', () => {
-    // Kill server process if running
-    if (serverProcess) {
-        console.log('[Electron] Stopping server...');
-        serverProcess.kill();
-        serverProcess = null;
+function killServerProcess() {
+    if (!serverProcess) return;
+
+    console.log('[Electron] Stopping server...');
+
+    if (process.platform === 'win32') {
+        // Windows: Use taskkill to ensure all child processes are killed
+        try {
+            spawn('taskkill', ['/pid', serverProcess.pid, '/f', '/t'], {
+                stdio: 'ignore'
+            });
+        } catch (err) {
+            console.error('[Electron] Error killing server:', err);
+        }
+    } else {
+        // Unix-like: Use regular kill
+        try {
+            serverProcess.kill('SIGTERM');
+        } catch (err) {
+            console.error('[Electron] Error killing server:', err);
+        }
     }
+
+    serverProcess = null;
+}
+
+app.on('window-all-closed', () => {
+    killServerProcess();
 
     if (process.platform !== 'darwin') {
         app.quit();
     }
 });
 
-app.on('before-quit', () => {
-    // Ensure server is killed before app quits
+app.on('before-quit', (event) => {
     if (serverProcess) {
-        serverProcess.kill();
-        serverProcess = null;
+        event.preventDefault(); // Wait for server to stop
+        killServerProcess();
+
+        // Give it a moment, then quit
+        setTimeout(() => {
+            app.exit(0);
+        }, 500);
     }
 });
 
