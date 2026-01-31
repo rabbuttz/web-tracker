@@ -87,6 +87,7 @@ function App() {
 								handCalibrationRef.current.rightHandSize = handSize
 							}
 						}
+						localStorage.setItem('handCalibration', JSON.stringify(handCalibrationRef.current))
 					}
 					return null
 				}
@@ -101,7 +102,22 @@ function App() {
 				position: vec3.clone(rawHeadPoseRef.current.position),
 				quaternion: quat.clone(rawHeadPoseRef.current.quaternion)
 			}
+			localStorage.setItem('headCalibration', JSON.stringify({
+				position: Array.from(calibrationRef.current.position),
+				quaternion: Array.from(calibrationRef.current.quaternion)
+			}))
 		}
+	}, [])
+
+	const handleResetCalibration = useCallback(() => {
+		calibrationRef.current = null
+		handCalibrationRef.current = {
+			leftHandSize: null,
+			rightHandSize: null,
+			referenceDepth: 0.5
+		}
+		localStorage.removeItem('headCalibration')
+		localStorage.removeItem('handCalibration')
 	}, [])
 
 	const handleSetupFaceTrack = useCallback(async (username: string, port: number) => {
@@ -389,6 +405,32 @@ function App() {
 		}
 	}, [threeStateRef])
 
+	// Load calibration on startup
+	useEffect(() => {
+		const savedHeadCalib = localStorage.getItem('headCalibration')
+		if (savedHeadCalib) {
+			try {
+				const parsed = JSON.parse(savedHeadCalib)
+				calibrationRef.current = {
+					position: vec3.fromValues(parsed.position[0], parsed.position[1], parsed.position[2]),
+					quaternion: quat.fromValues(parsed.quaternion[0], parsed.quaternion[1], parsed.quaternion[2], parsed.quaternion[3])
+				}
+			} catch (e) {
+				console.error('Failed to load head calibration:', e)
+			}
+		}
+
+		const savedHandCalib = localStorage.getItem('handCalibration')
+		if (savedHandCalib) {
+			try {
+				const parsed = JSON.parse(savedHandCalib)
+				handCalibrationRef.current = parsed
+			} catch (e) {
+				console.error('Failed to load hand calibration:', e)
+			}
+		}
+	}, [])
+
 	// Camera setup
 	useEffect(() => {
 		const updateDevices = async () => {
@@ -467,6 +509,7 @@ function App() {
 				onDeviceChange={setSelectedDeviceId}
 				onCalibrate={handleCalibrate}
 				onHandCalibrate={handleHandCalibrate}
+				onResetCalibration={handleResetCalibration}
 				handCalibCountdown={handCalibCountdown}
 				onSetupFaceTrack={handleSetupFaceTrack}
 				setupStatus={setupStatus}

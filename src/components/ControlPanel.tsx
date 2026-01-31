@@ -6,6 +6,7 @@ interface ControlPanelProps {
     onDeviceChange: (deviceId: string) => void;
     onCalibrate: () => void;
     onHandCalibrate: () => void;
+    onResetCalibration: () => void;
     handCalibCountdown: number | null;
     onSetupFaceTrack: (username: string, port: number) => void;
     setupStatus: string;
@@ -26,6 +27,7 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
     onDeviceChange,
     onCalibrate,
     onHandCalibrate,
+    onResetCalibration,
     handCalibCountdown,
     onSetupFaceTrack,
     setupStatus,
@@ -104,6 +106,12 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
                     {handCalibCountdown !== null
                         ? `Hand Calibrate (${handCalibCountdown})`
                         : 'Hand Calibrate'}
+                </button>
+            </div>
+
+            <div className="control-group">
+                <button className="glass-button reset-button" onClick={onResetCalibration}>
+                    Reset All Calibration
                 </button>
             </div>
 
@@ -247,6 +255,14 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
 				.hand-calib-button:hover:not(:disabled) {
 					background: rgba(120, 80, 200, 0.7);
 					border-color: rgba(150, 100, 255, 0.5);
+				}
+				.reset-button {
+					background: rgba(180, 60, 60, 0.5);
+					border-color: rgba(255, 100, 100, 0.3);
+				}
+				.reset-button:hover {
+					background: rgba(200, 80, 80, 0.7);
+					border-color: rgba(255, 100, 100, 0.5);
 				}
 				.debug-section {
 					margin-top: 12px;
