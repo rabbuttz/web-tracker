@@ -48,11 +48,15 @@ export function useMediaPipe(
         let isRunning = true;
         const processFrame = async () => {
             if (!isRunning) return;
-            if (videoElement && videoElement.readyState >= 2) {
-                await hands.send({ image: videoElement });
-                if (faceMeshRef.current) {
-                    await faceMeshRef.current.send({ image: videoElement });
+            try {
+                if (videoElement && videoElement.readyState >= 2) {
+                    await hands.send({ image: videoElement });
+                    if (faceMeshRef.current) {
+                        await faceMeshRef.current.send({ image: videoElement });
+                    }
                 }
+            } catch (error) {
+                console.error('Error processing frame:', error);
             }
             timerId = setTimeout(processFrame, 1000 / 30); // 30fps
         };

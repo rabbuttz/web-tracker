@@ -39,9 +39,18 @@ function App() {
 		oh: number;
 	} | null>(null)
 
+	const [videoElement, setVideoElement] = useState<HTMLVideoElement | null>(null);
+
 	const webcamRef = useRef<Webcam>(null)
 	const canvasRef = useRef<HTMLCanvasElement>(null)
 	const threeCanvasRef = useRef<HTMLCanvasElement>(null)
+
+	const handleWebcamRef = useCallback((node: Webcam | null) => {
+		webcamRef.current = node;
+		if (node && node.video) {
+			setVideoElement(node.video);
+		}
+	}, []);
 
 	const handResultsRef = useRef<HandResults | null>(null)
 	const faceResultsRef = useRef<FaceResults | null>(null)
@@ -406,7 +415,7 @@ function App() {
 
 	// MediaPipe setup
 	useMediaPipe(
-		webcamRef.current?.video || null,
+		videoElement,
 		onHandResults,
 		onFaceResults,
 		selectedDeviceId
@@ -416,12 +425,18 @@ function App() {
 	return (
 		<div className="app-container" style={{ position: 'relative', width: WIDTH, height: HEIGHT, backgroundColor: '#0f0f13', overflow: 'hidden' }}>
 			<Webcam
+				key={selectedDeviceId}
 				audio={false}
 				style={{ visibility: 'hidden', position: 'absolute' }}
 				width={WIDTH}
 				height={HEIGHT}
-				ref={webcamRef}
+				ref={handleWebcamRef}
 				videoConstraints={{ width: WIDTH, height: HEIGHT, deviceId: selectedDeviceId ? { exact: selectedDeviceId } : undefined }}
+				onUserMedia={() => {
+					if (webcamRef.current?.video) {
+						setVideoElement(webcamRef.current.video);
+					}
+				}}
 			/>
 			<canvas
 				ref={canvasRef}
