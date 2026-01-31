@@ -355,7 +355,6 @@ function App() {
       if (expressionModeRef.current === 'blendshape') {
         // Perfect Sync Mode: Calculate aiueo from blendshapes and send to legacy paths
         const jawOpen = getBlendshapeValue('jawOpen')
-        const mouthOpen = getBlendshapeValue('mouthOpen')
         const mouthPucker = getBlendshapeValue('mouthPucker')
         const mouthFunnel = getBlendshapeValue('mouthFunnel')
         const mouthSmileLeft = getBlendshapeValue('mouthSmileLeft')
@@ -368,11 +367,11 @@ function App() {
         const mouthDimpleRight = getBlendshapeValue('mouthDimpleRight')
 
         // Calculate aiueo from blendshapes
-        let v_aa = Math.min(1.0, (jawOpen + mouthOpen) * 0.8 + mouthPucker * 0.2)
+        let v_aa = Math.min(1.0, jawOpen * 0.8 + mouthPucker * 0.2)
         let v_ih = Math.min(1.0, (mouthSmileLeft + mouthSmileRight) * 0.4 + (mouthStretchLeft + mouthStretchRight) * 0.6)
         let v_ou = Math.min(1.0, mouthPucker * 0.7 + mouthFunnel * 0.5)
         let v_E = Math.min(1.0, (mouthLowerDown + mouthUpperUp) * 0.5 + (mouthDimpleLeft + mouthDimpleRight) * 0.5)
-        let v_oh = Math.min(1.0, mouthPucker * 0.3 + (jawOpen + mouthOpen) * 0.5)
+        let v_oh = Math.min(1.0, mouthPucker * 0.3 + jawOpen * 0.5)
 
         // Normalize
         const maxViseme = Math.max(v_aa, v_ih, v_ou, v_E, v_oh)
@@ -427,7 +426,6 @@ function App() {
       } else if (expressionModeRef.current === 'visemeBlendshape') {
         // Viseme (Blendshape-based): Calculate aiueo from blendshapes
         const jawOpen = getBlendshapeValue('jawOpen')
-        const mouthOpen = getBlendshapeValue('mouthOpen')
         const mouthPucker = getBlendshapeValue('mouthPucker')
         const mouthFunnel = getBlendshapeValue('mouthFunnel')
         const mouthSmileLeft = getBlendshapeValue('mouthSmileLeft')
@@ -440,8 +438,8 @@ function App() {
         const mouthDimpleRight = getBlendshapeValue('mouthDimpleRight')
 
         // Calculate aiueo from blendshapes
-        // aa (あ): jaw/mouth open + round
-        let v_aa = Math.min(1.0, (jawOpen + mouthOpen) * 0.8 + mouthPucker * 0.2)
+        // aa (あ): jaw open + round
+        let v_aa = Math.min(1.0, jawOpen * 0.8 + mouthPucker * 0.2)
         
         // ih (い): wide smile/stretch
         let v_ih = Math.min(1.0, (mouthSmileLeft + mouthSmileRight) * 0.4 + (mouthStretchLeft + mouthStretchRight) * 0.6)
@@ -452,8 +450,8 @@ function App() {
         // E (え): wide + slightly open (like a smile showing teeth)
         let v_E = Math.min(1.0, (mouthLowerDown + mouthUpperUp) * 0.5 + (mouthDimpleLeft + mouthDimpleRight) * 0.5)
         
-        // oh (お): round open (pucker + open)
-        let v_oh = Math.min(1.0, mouthPucker * 0.3 + (jawOpen + mouthOpen) * 0.5)
+        // oh (お): round open (pucker + jaw open)
+        let v_oh = Math.min(1.0, mouthPucker * 0.3 + jawOpen * 0.5)
 
         // Normalize: ensure the sum doesn't exceed reasonable bounds and boost the dominant one
         const maxViseme = Math.max(v_aa, v_ih, v_ou, v_E, v_oh)
