@@ -11,7 +11,8 @@ export function useMediaPipe(
   videoElement: HTMLVideoElement | null,
   onResults: (faceResult: FaceLandmarkerResult | null, handResult: HandLandmarkerResult | null) => void,
   deviceId: string,
-  onLoadingChange?: (isLoading: boolean) => void
+  onLoadingChange?: (isLoading: boolean) => void,
+  options?: { outputBlendshapes?: boolean }
 ) {
   const faceLandmarkerRef = useRef<FaceLandmarker | null>(null);
   const handLandmarkerRef = useRef<HandLandmarker | null>(null);
@@ -36,7 +37,7 @@ export function useMediaPipe(
         // Use unpkg instead of jsDelivr for better WASM file availability
         const wasmPath = 'https://unpkg.com/@mediapipe/tasks-vision@0.10.32/wasm';
         console.log('Loading WASM from:', wasmPath);
-        
+
         const vision = await FilesetResolver.forVisionTasks(wasmPath);
         console.log('FilesetResolver loaded successfully');
 
@@ -48,7 +49,7 @@ export function useMediaPipe(
             },
             runningMode: 'VIDEO',
             numFaces: 1,
-            outputFaceBlendshapes: true,
+            outputFaceBlendshapes: options?.outputBlendshapes ?? true,
             outputFacialTransformationMatrixes: true,
           }),
           HandLandmarker.createFromOptions(vision, {
@@ -112,7 +113,7 @@ export function useMediaPipe(
       }
       setIsInitialized(false);
     };
-  }, [videoElement, deviceId, onResults, onLoadingChange]);
+  }, [videoElement, deviceId, onResults, onLoadingChange, options?.outputBlendshapes]);
 
   return { isInitialized, error };
 }

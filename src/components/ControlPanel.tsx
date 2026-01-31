@@ -1,200 +1,193 @@
 import React, { useState } from 'react';
 
 interface ControlPanelProps {
-    devices: MediaDeviceInfo[];
-    selectedDeviceId: string;
-    onDeviceChange: (deviceId: string) => void;
-    onCalibrate: () => void;
-    onHandCalibrate: () => void;
-    handCalibCountdown: number | null;
-    onSetupFaceTrack: (username: string, port: number) => void;
-    setupStatus: string;
-    mouthDebug: {
-        nHeight: number;
-        nWidth: number;
-        aa: number;
-        ih: number;
-        ou: number;
-        E: number;
-        oh: number;
-    } | null;
-    blendshapeDebug: { name: string; value: number }[] | null;
-    expressionMode: 'viseme' | 'visemeBlendshape' | 'blendshape';
-    onSetMode: (mode: 'viseme' | 'visemeBlendshape' | 'blendshape') => void;
+	devices: MediaDeviceInfo[];
+	selectedDeviceId: string;
+	onDeviceChange: (deviceId: string) => void;
+	onCalibrate: () => void;
+	onHandCalibrate: () => void;
+	handCalibCountdown: number | null;
+	onSetupFaceTrack: (username: string, port: number) => void;
+	setupStatus: string;
+	mouthDebug: {
+		nHeight: number;
+		nWidth: number;
+		aa: number;
+		ih: number;
+		ou: number;
+		E: number;
+		oh: number;
+	} | null;
+	blendshapeDebug: { name: string; value: number }[] | null;
+	expressionMode: 'visemeBlendshape' | 'blendshape';
+	onSetMode: (mode: 'visemeBlendshape' | 'blendshape') => void;
 }
 
 export const ControlPanel: React.FC<ControlPanelProps> = ({
-    devices,
-    selectedDeviceId,
-    onDeviceChange,
-    onCalibrate,
-    onHandCalibrate,
-    handCalibCountdown,
-    onSetupFaceTrack,
-    setupStatus,
-    mouthDebug,
-    blendshapeDebug,
-    expressionMode,
-    onSetMode,
+	devices,
+	selectedDeviceId,
+	onDeviceChange,
+	onCalibrate,
+	onHandCalibrate,
+	handCalibCountdown,
+	onSetupFaceTrack,
+	setupStatus,
+	mouthDebug,
+	blendshapeDebug,
+	expressionMode,
+	onSetMode,
 }) => {
-    const [username, setUsername] = useState('Rabbuttz');
-    const [port, setPort] = useState('40160');
+	const [username, setUsername] = useState('Rabbuttz');
+	const [port, setPort] = useState('40160');
 
-    const handleSetup = () => {
-        onSetupFaceTrack(username, parseInt(port));
-    };
+	const handleSetup = () => {
+		onSetupFaceTrack(username, parseInt(port));
+	};
 
-    return (
-        <div className="controls-panel">
-            <div className="control-group">
-                <label htmlFor="username-input">Resonite Username</label>
-                <input
-                    id="username-input"
-                    type="text"
-                    value={username}
-                    onChange={(e) => setUsername(e.target.value)}
-                    className="glass-input"
-                    placeholder="Enter username"
-                />
-            </div>
+	return (
+		<div className="controls-panel">
+			<div className="control-group">
+				<label htmlFor="username-input">Resonite Username</label>
+				<input
+					id="username-input"
+					type="text"
+					value={username}
+					onChange={(e) => setUsername(e.target.value)}
+					className="glass-input"
+					placeholder="Enter username"
+				/>
+			</div>
 
-            <div className="control-group">
-                <label htmlFor="port-input">Resonite Port</label>
-                <input
-                    id="port-input"
-                    type="number"
-                    value={port}
-                    onChange={(e) => setPort(e.target.value)}
-                    className="glass-input"
-                    placeholder="40160"
-                />
-            </div>
+			<div className="control-group">
+				<label htmlFor="port-input">Resonite Port</label>
+				<input
+					id="port-input"
+					type="number"
+					value={port}
+					onChange={(e) => setPort(e.target.value)}
+					className="glass-input"
+					placeholder="40160"
+				/>
+			</div>
 
-            <div className="control-group">
-                <button className="glass-button setup-button" onClick={handleSetup}>
-                    Setup FaceTrack
-                </button>
-                {setupStatus && (
-                    <div className="status-text">{setupStatus}</div>
-                )}
-            </div>
+			<div className="control-group">
+				<button className="glass-button setup-button" onClick={handleSetup}>
+					Setup FaceTrack
+				</button>
+				{setupStatus && (
+					<div className="status-text">{setupStatus}</div>
+				)}
+			</div>
 
-            <div className="control-group">
-                <label htmlFor="camera-select">Camera Source</label>
-                <select
-                    id="camera-select"
-                    value={selectedDeviceId}
-                    onChange={(e) => onDeviceChange(e.target.value)}
-                    className="glass-select"
-                >
-                    {devices.map((device) => (
-                        <option key={device.deviceId} value={device.deviceId}>
-                            {device.label || `Camera ${device.deviceId.slice(0, 5)}`}
-                        </option>
-                    ))}
-                </select>
-            </div>
+			<div className="control-group">
+				<label htmlFor="camera-select">Camera Source</label>
+				<select
+					id="camera-select"
+					value={selectedDeviceId}
+					onChange={(e) => onDeviceChange(e.target.value)}
+					className="glass-select"
+				>
+					{devices.map((device) => (
+						<option key={device.deviceId} value={device.deviceId}>
+							{device.label || `Camera ${device.deviceId.slice(0, 5)}`}
+						</option>
+					))}
+				</select>
+			</div>
 
-            <div className="control-group">
-                <button className="glass-button" onClick={onCalibrate}>
-                    Head Calibrate
-                </button>
-            </div>
+			<div className="control-group">
+				<button className="glass-button" onClick={onCalibrate}>
+					Head Calibrate
+				</button>
+			</div>
 
-            <div className="control-group">
-                <button
-                    className="glass-button hand-calib-button"
-                    onClick={onHandCalibrate}
-                    disabled={handCalibCountdown !== null}
-                >
-                    {handCalibCountdown !== null
-                        ? `Hand Calibrate (${handCalibCountdown})`
-                        : 'Hand Calibrate'}
-                </button>
-            </div>
+			<div className="control-group">
+				<button
+					className="glass-button hand-calib-button"
+					onClick={onHandCalibrate}
+					disabled={handCalibCountdown !== null}
+				>
+					{handCalibCountdown !== null
+						? `Hand Calibrate (${handCalibCountdown})`
+						: 'Hand Calibrate'}
+				</button>
+			</div>
 
-            <div className="control-group">
-                <label>Expression Mode</label>
-                <div className="mode-toggle-container">
-                    <div className="mode-button-group">
-                        <button 
-                            className={`mode-button ${expressionMode === 'viseme' ? 'active' : ''}`}
-                            onClick={() => expressionMode !== 'viseme' && onSetMode('viseme')}
-                        >
-                            Viseme (Legacy)
-                        </button>
-                        <button 
-                            className={`mode-button ${expressionMode === 'visemeBlendshape' ? 'active' : ''}`}
-                            onClick={() => expressionMode !== 'visemeBlendshape' && onSetMode('visemeBlendshape')}
-                        >
-                            Viseme (BS)
-                        </button>
-                        <button 
-                            className={`mode-button ${expressionMode === 'blendshape' ? 'active' : ''}`}
-                            onClick={() => expressionMode !== 'blendshape' && onSetMode('blendshape')}
-                        >
-                            Perfect Sync
-                        </button>
-                    </div>
-                </div>
-                <div className="mode-description">
-                    {expressionMode === 'viseme' && 'Landmark-based aiueo calculation'}
-                    {expressionMode === 'visemeBlendshape' && 'Blendshape-based aiueo calculation'}
-                    {expressionMode === 'blendshape' && 'Direct blendshape parameters'}
-                </div>
-            </div>
+			<div className="control-group">
+				<label>Expression Mode</label>
+				<div className="mode-toggle-container">
+					<div className="mode-button-group">
+						<button
+							className={`mode-button ${expressionMode === 'visemeBlendshape' ? 'active' : ''}`}
+							onClick={() => expressionMode !== 'visemeBlendshape' && onSetMode('visemeBlendshape')}
+						>
+							Viseme (Standard)
+						</button>
+						<button
+							className={`mode-button ${expressionMode === 'blendshape' ? 'active' : ''}`}
+							onClick={() => expressionMode !== 'blendshape' && onSetMode('blendshape')}
+						>
+							Perfect Sync
+						</button>
+					</div>
+				</div>
+				<div className="mode-description">
+					{expressionMode === 'visemeBlendshape' && 'Blendshape-based aiueo calculation'}
+					{expressionMode === 'blendshape' && 'Direct blendshape parameters'}
+				</div>
+			</div>
 
-            {(expressionMode === 'viseme' || expressionMode === 'visemeBlendshape') && mouthDebug && (
-                <div className="control-group debug-section">
-                    <label>Mouth Debug (あいうえお) - {expressionMode === 'viseme' ? 'Legacy' : 'Blendshape'}</label>
-                    <div className="debug-grid">
-                        <div className="debug-item">
-                            <span className="debug-label">Height:</span>
-                            <span className="debug-value">{mouthDebug.nHeight.toFixed(3)}</span>
-                        </div>
-                        <div className="debug-item">
-                            <span className="debug-label">Width:</span>
-                            <span className="debug-value">{mouthDebug.nWidth.toFixed(3)}</span>
-                        </div>
-                        <div className="debug-item viseme">
-                            <span className="debug-label">あ (aa):</span>
-                            <span className="debug-value">{mouthDebug.aa.toFixed(3)}</span>
-                        </div>
-                        <div className="debug-item viseme">
-                            <span className="debug-label">い (ih):</span>
-                            <span className="debug-value">{mouthDebug.ih.toFixed(3)}</span>
-                        </div>
-                        <div className="debug-item viseme">
-                            <span className="debug-label">う (ou):</span>
-                            <span className="debug-value">{mouthDebug.ou.toFixed(3)}</span>
-                        </div>
-                        <div className="debug-item viseme">
-                            <span className="debug-label">え (E):</span>
-                            <span className="debug-value">{mouthDebug.E.toFixed(3)}</span>
-                        </div>
-                        <div className="debug-item viseme">
-                            <span className="debug-label">お (oh):</span>
-                            <span className="debug-value">{mouthDebug.oh.toFixed(3)}</span>
-                        </div>
-                    </div>
-                </div>
-            )}
+			{expressionMode === 'visemeBlendshape' && mouthDebug && (
+				<div className="control-group debug-section">
+					<label>Mouth Debug (あいうえお)</label>
+					<div className="debug-grid">
+						<div className="debug-item">
+							<span className="debug-label">Height:</span>
+							<span className="debug-value">{mouthDebug.nHeight.toFixed(3)}</span>
+						</div>
+						<div className="debug-item">
+							<span className="debug-label">Width:</span>
+							<span className="debug-value">{mouthDebug.nWidth.toFixed(3)}</span>
+						</div>
+						<div className="debug-item viseme">
+							<span className="debug-label">あ (aa):</span>
+							<span className="debug-value">{mouthDebug.aa.toFixed(3)}</span>
+						</div>
+						<div className="debug-item viseme">
+							<span className="debug-label">い (ih):</span>
+							<span className="debug-value">{mouthDebug.ih.toFixed(3)}</span>
+						</div>
+						<div className="debug-item viseme">
+							<span className="debug-label">う (ou):</span>
+							<span className="debug-value">{mouthDebug.ou.toFixed(3)}</span>
+						</div>
+						<div className="debug-item viseme">
+							<span className="debug-label">え (E):</span>
+							<span className="debug-value">{mouthDebug.E.toFixed(3)}</span>
+						</div>
+						<div className="debug-item viseme">
+							<span className="debug-label">お (oh):</span>
+							<span className="debug-value">{mouthDebug.oh.toFixed(3)}</span>
+						</div>
+					</div>
+				</div>
+			)}
 
-            {expressionMode === 'blendshape' && blendshapeDebug && blendshapeDebug.length > 0 && (
-                <div className="control-group debug-section">
-                    <label>Blendshapes ({blendshapeDebug.length})</label>
-                    <div className="debug-grid blendshape-grid">
-                        {blendshapeDebug.map((bs, index) => (
-                            <div key={index} className="debug-item blendshape">
-                                <span className="debug-label">{bs.name}:</span>
-                                <span className="debug-value">{bs.value.toFixed(3)}</span>
-                            </div>
-                        ))}
-                    </div>
-                </div>
-            )}
+			{expressionMode === 'blendshape' && blendshapeDebug && blendshapeDebug.length > 0 && (
+				<div className="control-group debug-section">
+					<label>Blendshapes ({blendshapeDebug.length})</label>
+					<div className="debug-grid blendshape-grid">
+						{blendshapeDebug.map((bs, index) => (
+							<div key={index} className="debug-item blendshape">
+								<span className="debug-label">{bs.name}:</span>
+								<span className="debug-value">{bs.value.toFixed(3)}</span>
+							</div>
+						))}
+					</div>
+				</div>
+			)}
 
-            <style>{`
+			<style>{`
 				.controls-panel {
 					position: absolute;
 					top: 20px;
@@ -419,6 +412,6 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
 					font-weight: 600;
 				}
 			`}</style>
-        </div>
-    );
+		</div>
+	);
 };

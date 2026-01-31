@@ -29,7 +29,7 @@ function App() {
   const [handCalibCountdown, setHandCalibCountdown] = useState<number | null>(null)
   const [setupStatus, setSetupStatus] = useState<string>('')
   const [isLoading, setIsLoading] = useState<boolean>(true)
-  const [expressionMode, setExpressionMode] = useState<'viseme' | 'visemeBlendshape' | 'blendshape'>('viseme')
+  const [expressionMode, setExpressionMode] = useState<'visemeBlendshape' | 'blendshape'>('visemeBlendshape')
   const [mouthDebug, setMouthDebug] = useState<{
     nHeight: number;
     nWidth: number;
@@ -39,7 +39,7 @@ function App() {
     E: number;
     oh: number;
   } | null>(null)
-  
+
   const [blendshapeDebug, setBlendshapeDebug] = useState<{ name: string; value: number }[] | null>(null)
 
   const [videoElement, setVideoElement] = useState<HTMLVideoElement | null>(null);
@@ -65,11 +65,11 @@ function App() {
     rightHandSize: null,
     referenceDepth: 0.5
   })
-  
+
   const detectedBlendshapeNamesRef = useRef<Set<string>>(new Set())
   const debugUpdateCounterRef = useRef(0)
-  const expressionModeRef = useRef<'viseme' | 'visemeBlendshape' | 'blendshape'>(expressionMode)
-  
+  const expressionModeRef = useRef<'visemeBlendshape' | 'blendshape'>(expressionMode)
+
   // Keep expressionModeRef in sync with state
   useEffect(() => {
     expressionModeRef.current = expressionMode
@@ -136,7 +136,7 @@ function App() {
     }
   }, [])
 
-  const handleSetMode = useCallback((mode: 'viseme' | 'visemeBlendshape' | 'blendshape') => {
+  const handleSetMode = useCallback((mode: 'visemeBlendshape' | 'blendshape') => {
     setExpressionMode(mode)
   }, [])
 
@@ -155,11 +155,11 @@ function App() {
   const processResults = useCallback((faceResults: FaceLandmarkerResult | null, handResults: HandLandmarkerResult | null) => {
     faceResultsRef.current = faceResults
     handResultsRef.current = handResults
-    
+
     // Throttle debug UI updates to every 5 frames to reduce React re-renders
     debugUpdateCounterRef.current = (debugUpdateCounterRef.current + 1) % 5
     const shouldUpdateDebug = debugUpdateCounterRef.current === 0
-    
+
     const canvasCtx = canvasRef.current?.getContext('2d')
     if (canvasCtx) {
       if (videoElement && videoElement.readyState >= 2) {
@@ -292,12 +292,12 @@ function App() {
         const pose = poseFromFaceLandmarks(lms)
         quaternion = pose.quaternion
       }
-      
+
       // Convert to screen coordinates
       const gizmoX = (MIRROR_X ? 1 - position[0] : position[0]) * WIDTH
       const gizmoY = (1 - position[1]) * HEIGHT
       const gizmoZ = -position[2] * 300
-      
+
       st.faceGizmo.position.set(gizmoX, gizmoY, gizmoZ)
       st.faceGizmo.quaternion.set(quaternion[0], quaternion[1], quaternion[2], quaternion[3])
 
@@ -322,8 +322,9 @@ function App() {
       }
 
       sendParam('/avatar/parameters/Head.Position', [outPos[0], outPos[1], outPos[2]])
-      sendParam('/avatar/parameters/Head.Rotation', [outQuat[0], outQuat[1], outQuat[2], outQuat[3]])
-      sendParam('Head.Rotation', [outQuat[0], outQuat[1], outQuat[2], outQuat[3]])
+      // Swap Y and Z components for Resonite coordinate system, negate Z (roll) to fix direction
+      sendParam('/avatar/parameters/Head.Rotation', [outQuat[0], -outQuat[2], outQuat[1], outQuat[3]])
+      sendParam('Head.Rotation', [outQuat[0], -outQuat[2], outQuat[1], outQuat[3]])
 
       // Mouth and Viseme / Blendshapes calculation
       const upper = lms[FACE_LM.LIP_UPPER]
@@ -342,7 +343,7 @@ function App() {
       const nHeight = mouthHeight / faceHeight
       const nWidth = mouthWidth / eyeDist
 
-      const mouthOpen = Math.max(0, Math.min(1.0, nHeight / 0.2))
+      const mouthOpen = Math.max(0.0001, Math.min(1.0, nHeight / 0.2))
       sendParam('/avatar/parameters/MouthOpen', [mouthOpen])
 
       const blendshapes = faceResults.faceBlendshapes?.[0]?.categories
@@ -367,21 +368,46 @@ function App() {
         const mouthDimpleRight = getBlendshapeValue('mouthDimpleRight')
 
         // Calculate aiueo from blendshapes
-        let v_aa = Math.min(1.0, jawOpen * 0.8 + mouthPucker * 0.2)
-        let v_ih = Math.min(1.0, (mouthSmileLeft + mouthSmileRight) * 0.4 + (mouthStretchLeft + mouthStretchRight) * 0.6)
-        let v_ou = Math.min(1.0, mouthPucker * 0.7 + mouthFunnel * 0.5)
-        let v_E = Math.min(1.0, (mouthLowerDown + mouthUpperUp) * 0.5 + (mouthDimpleLeft + mouthDimpleRight) * 0.5)
-        let v_oh = Math.min(1.0, mouthPucker * 0.3 + jawOpen * 0.5)
+        // mouthOpenness gate: Use normalized mouth height (actual lip separation)
+        const mouthOpenGate = Math.min(1.0, nHeight / 0.04)
 
-        // Normalize
-        const maxViseme = Math.max(v_aa, v_ih, v_ou, v_E, v_oh)
-        if (maxViseme > 0.1) {
-          const threshold = maxViseme * 0.6
-          if (v_aa < threshold) v_aa *= 0.3
-          if (v_ih < threshold) v_ih *= 0.3
-          if (v_ou < threshold) v_ou *= 0.3
-          if (v_E < threshold) v_E *= 0.3
-          if (v_oh < threshold) v_oh *= 0.3
+        // aa (あ): primarily jaw open
+        let v_aa = Math.max(0, jawOpen * 1.5 - 0.1) * mouthOpenGate
+
+        // ih (い): wide smile/stretch
+        const smileAmount = (mouthSmileLeft + mouthSmileRight) * 0.5 + (mouthStretchLeft + mouthStretchRight) * 0.5
+        let v_ih = Math.max(0, smileAmount * 1.3 - 0.1) * mouthOpenGate
+
+        // ou (う): pucker/funnel
+        const puckerAmount = mouthPucker * 0.7 + mouthFunnel * 0.3
+        let v_ou = Math.max(0, puckerAmount * 1.0 - 0.3) * mouthOpenGate
+
+        // E (え): mouth open with horizontal stretch (between あ and い)
+        const lipOpen = (mouthLowerDown + mouthUpperUp) * 0.5
+        const eStretch = (mouthStretchLeft + mouthStretchRight) * 0.5
+        const eSmile = (mouthSmileLeft + mouthSmileRight) * 0.3
+        let v_E = Math.min(1.0, Math.max(0, lipOpen + eStretch + eSmile + jawOpen * 0.6) * 1.5) * mouthOpenGate
+
+        // oh (お): jaw open + moderate pucker
+        let v_oh = Math.max(0, (jawOpen * 0.8 + mouthPucker * 0.4) - 0.25) * 1.0 * mouthOpenGate
+
+        // Normalization: sum to 1.5 max
+        const rawValues = [v_aa, v_ih, v_ou, v_E, v_oh]
+        const sum = rawValues.reduce((a, b) => a + b, 0)
+
+        if (sum > 1.5) {
+          const scale = 1.5 / sum
+          v_aa *= scale
+          v_ih *= scale
+          v_ou *= scale
+          v_E *= scale
+          v_oh *= scale
+        } else if (sum <= 0.01) {
+          v_aa = 0.0001
+          v_ih = 0.0001
+          v_ou = 0.0001
+          v_E = 0.0001
+          v_oh = 0.0001
         }
 
         // Clamp and validate
@@ -403,7 +429,7 @@ function App() {
         sendParam('/avatar/parameters/Blendshapes/EyeBlinkRight', [getBlendshapeValue('eyeBlinkRight')])
         sendParam('/avatar/parameters/Blendshapes/BrowInnerUp', [getBlendshapeValue('browInnerUp')])
         sendParam('/avatar/parameters/Blendshapes/CheekPuff', [getBlendshapeValue('cheekPuff')])
-        
+
         if (blendshapes) {
           // Update blendshape debug display - remember names that exceeded threshold
           blendshapes.forEach(bs => {
@@ -411,7 +437,7 @@ function App() {
               detectedBlendshapeNamesRef.current.add(bs.categoryName)
             }
           })
-          
+
           // Show all remembered blendshapes with current values (alphabetically sorted)
           if (shouldUpdateDebug) {
             const allDetectedBlendshapes = Array.from(detectedBlendshapeNamesRef.current)
@@ -423,7 +449,7 @@ function App() {
             setBlendshapeDebug(allDetectedBlendshapes)
           }
         }
-      } else if (expressionModeRef.current === 'visemeBlendshape') {
+      } else {
         // Viseme (Blendshape-based): Calculate aiueo from blendshapes
         const jawOpen = getBlendshapeValue('jawOpen')
         const mouthPucker = getBlendshapeValue('mouthPucker')
@@ -434,43 +460,58 @@ function App() {
         const mouthStretchRight = getBlendshapeValue('mouthStretchRight')
         const mouthLowerDown = getBlendshapeValue('mouthLowerDownLeft') + getBlendshapeValue('mouthLowerDownRight')
         const mouthUpperUp = getBlendshapeValue('mouthUpperUpLeft') + getBlendshapeValue('mouthUpperUpRight')
-        const mouthDimpleLeft = getBlendshapeValue('mouthDimpleLeft')
-        const mouthDimpleRight = getBlendshapeValue('mouthDimpleRight')
 
         // Calculate aiueo from blendshapes
-        // aa (あ): jaw open + round
-        let v_aa = Math.min(1.0, jawOpen * 0.8 + mouthPucker * 0.2)
-        
-        // ih (い): wide smile/stretch
-        let v_ih = Math.min(1.0, (mouthSmileLeft + mouthSmileRight) * 0.4 + (mouthStretchLeft + mouthStretchRight) * 0.6)
-        
-        // ou (う): pucker/funnel (round narrow mouth)
-        let v_ou = Math.min(1.0, mouthPucker * 0.7 + mouthFunnel * 0.5)
-        
-        // E (え): wide + slightly open (like a smile showing teeth)
-        let v_E = Math.min(1.0, (mouthLowerDown + mouthUpperUp) * 0.5 + (mouthDimpleLeft + mouthDimpleRight) * 0.5)
-        
-        // oh (お): round open (pucker + jaw open)
-        let v_oh = Math.min(1.0, mouthPucker * 0.3 + jawOpen * 0.5)
+        // mouthOpenness: Use normalized mouth height (actual lip separation) as the gate.
+        // This prevents activation when the jaw moves while the lips are still closed.
+        const mouthOpenGate = Math.min(1.0, nHeight / 0.04)
 
-        // Normalize: ensure the sum doesn't exceed reasonable bounds and boost the dominant one
-        const maxViseme = Math.max(v_aa, v_ih, v_ou, v_E, v_oh)
-        if (maxViseme > 0.1) {
-          const threshold = maxViseme * 0.6
-          if (v_aa < threshold) v_aa *= 0.3
-          if (v_ih < threshold) v_ih *= 0.3
-          if (v_ou < threshold) v_ou *= 0.3
-          if (v_E < threshold) v_E *= 0.3
-          if (v_oh < threshold) v_oh *= 0.3
+        // aa (あ): primarily jaw open
+        let v_aa = Math.max(0, jawOpen * 1.5 - 0.1) * mouthOpenGate
+
+        // ih (い): wide smile/stretch
+        const smileAmount = (mouthSmileLeft + mouthSmileRight) * 0.5 + (mouthStretchLeft + mouthStretchRight) * 0.5
+        let v_ih = Math.max(0, smileAmount * 1.3 - 0.1) * mouthOpenGate
+
+        // ou (う): pucker/funnel
+        const puckerAmount = mouthPucker * 0.7 + mouthFunnel * 0.3
+        let v_ou = Math.max(0, puckerAmount * 1.0 - 0.3) * mouthOpenGate
+        // E (え): mouth open with horizontal stretch (between あ and い)
+        const lipOpen = (mouthLowerDown + mouthUpperUp) * 0.5
+        const eStretch = (mouthStretchLeft + mouthStretchRight) * 0.5
+        const eSmile = (mouthSmileLeft + mouthSmileRight) * 0.3
+        let v_E = Math.min(1.0, Math.max(0, lipOpen + eStretch + eSmile + jawOpen * 0.6) * 1.5) * mouthOpenGate
+
+        // oh (お): jaw open + moderate pucker
+        let v_oh = Math.max(0, (jawOpen * 0.8 + mouthPucker * 0.4) - 0.25) * 1.0 * mouthOpenGate
+
+        // Softmax-style normalization: sum to 1.0, emphasize the dominant viseme
+        const rawValues = [v_aa, v_ih, v_ou, v_E, v_oh]
+        const sum = rawValues.reduce((a, b) => a + b, 0)
+
+        if (sum > 1.5) {
+          // Normalize only when sum exceeds 1.5
+          const scale = 1.5 / sum
+          v_aa *= scale
+          v_ih *= scale
+          v_ou *= scale
+          v_E *= scale
+          v_oh *= scale
+        } else if (sum <= 0.01) {
+          // Mouth is closed - explicitly set all to 0.0001
+          v_aa = 0.0001
+          v_ih = 0.0001
+          v_ou = 0.0001
+          v_E = 0.0001
+          v_oh = 0.0001
         }
 
-        // Clamp and validate
+        // Clamp and validate - use 0.0001 as minimum to ensure receiver updates
         v_aa = isNaN(v_aa) ? 0.0001 : Math.max(0.0001, Math.min(1.0, v_aa))
         v_ih = isNaN(v_ih) ? 0.0001 : Math.max(0.0001, Math.min(1.0, v_ih))
         v_ou = isNaN(v_ou) ? 0.0001 : Math.max(0.0001, Math.min(1.0, v_ou))
         v_E = isNaN(v_E) ? 0.0001 : Math.max(0.0001, Math.min(1.0, v_E))
         v_oh = isNaN(v_oh) ? 0.0001 : Math.max(0.0001, Math.min(1.0, v_oh))
-
         sendParam('/avatar/parameters/aa', [v_aa])
         sendParam('/avatar/parameters/ih', [v_ih])
         sendParam('/avatar/parameters/ou', [v_ou])
@@ -494,80 +535,7 @@ function App() {
             oh: v_oh
           })
         }
-      } else {
-        // Viseme Mode (Legacy): Calculate あいうえお from landmarks
-        const targets = {
-          aa: { h: 0.20, w: 0.50 },
-          ih: { h: 0.06, w: 0.58 },
-          ou: { h: 0.015, w: 0.35 },
-          E: { h: 0.07, w: 0.50 },
-          oh: { h: 0.05, w: 0.28 }
-        }
-
-        const calcActivation = (targetH: number, targetW: number, hWeight: number, wWeight: number, threshold: number) => {
-          const hDist = Math.abs(nHeight - targetH) / hWeight
-          const wDist = Math.abs(nWidth - targetW) / wWeight
-          const totalDist = Math.sqrt(hDist * hDist + wDist * wDist)
-          return Math.max(0, 1.0 - totalDist / threshold)
-        }
-
-        let v_aa = nHeight < 0.01 ? 0 : calcActivation(targets.aa.h, targets.aa.w, 0.15, 0.15, 1.2)
-        let v_ih = nHeight < 0.01 ? 0 : calcActivation(targets.ih.h, targets.ih.w, 0.05, 0.1, 1.5)
-        let v_ou = nHeight < 0.005 ? 0 : calcActivation(targets.ou.h, targets.ou.w, 0.02, 0.15, 1.5)
-        let v_E = nHeight < 0.01 ? 0 : calcActivation(targets.E.h, targets.E.w, 0.05, 0.15, 1.5)
-        let v_oh = nHeight < 0.01 ? 0 : calcActivation(targets.oh.h, targets.oh.w, 0.04, 0.1, 1.5)
-
-        v_aa = isNaN(v_aa) ? 0 : v_aa
-        v_ih = isNaN(v_ih) ? 0 : v_ih
-        v_ou = isNaN(v_ou) ? 0 : v_ou
-        v_E = isNaN(v_E) ? 0 : v_E
-        v_oh = isNaN(v_oh) ? 0 : v_oh
-
-        if (nHeight >= 0.12) {
-          const heightRatio = Math.min(1.0, nHeight / 0.2)
-          v_aa = Math.max(v_aa, heightRatio)
-        } else if (nHeight >= 0.02) {
-          const maxViseme = Math.max(v_aa, v_ih, v_ou, v_E, v_oh)
-          if (maxViseme < 0.3) {
-            const minBoost = 0.4
-            if (v_aa >= maxViseme) v_aa = Math.max(v_aa, minBoost)
-            else if (v_E >= maxViseme) v_E = Math.max(v_E, minBoost)
-            else if (v_ih >= maxViseme) v_ih = Math.max(v_ih, minBoost)
-            else if (v_oh >= maxViseme) v_oh = Math.max(v_oh, minBoost)
-            else if (v_ou >= maxViseme) v_ou = Math.max(v_ou, minBoost)
-          }
-        }
-
-        sendParam('/avatar/parameters/aa', [v_aa === 0 ? 0.0001 : v_aa])
-        sendParam('/avatar/parameters/ih', [v_ih === 0 ? 0.0001 : v_ih])
-        sendParam('/avatar/parameters/ou', [v_ou === 0 ? 0.0001 : v_ou])
-        sendParam('/avatar/parameters/E', [v_E === 0 ? 0.0001 : v_E])
-        sendParam('/avatar/parameters/oh', [v_oh === 0 ? 0.0001 : v_oh])
-
-        // Send 0 to blendshapes to reset them
-        sendParam('/avatar/parameters/Blendshapes/JawOpen', [0])
-        sendParam('/avatar/parameters/Blendshapes/MouthOpen', [0])
-        sendParam('/avatar/parameters/Blendshapes/MouthPucker', [0])
-        sendParam('/avatar/parameters/Blendshapes/MouthSmile', [0])
-        sendParam('/avatar/parameters/Blendshapes/EyeBlinkLeft', [0])
-        sendParam('/avatar/parameters/Blendshapes/EyeBlinkRight', [0])
-        sendParam('/avatar/parameters/Blendshapes/BrowInnerUp', [0])
-        sendParam('/avatar/parameters/Blendshapes/CheekPuff', [0])
-
-        if (shouldUpdateDebug) {
-          setMouthDebug({
-            nHeight,
-            nWidth,
-            aa: v_aa,
-            ih: v_ih,
-            ou: v_ou,
-            E: v_E,
-            oh: v_oh
-          })
-          setBlendshapeDebug(null)
-        }
       }
-
       sendParam('/avatar/parameters/Head.Detected', [1])
     } else {
       st.faceGizmo.visible = false
@@ -610,7 +578,8 @@ function App() {
     videoElement,
     processResults,
     selectedDeviceId,
-    setIsLoading
+    setIsLoading,
+    { outputBlendshapes: true }
   )
 
 
