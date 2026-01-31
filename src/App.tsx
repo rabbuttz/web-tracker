@@ -31,7 +31,18 @@ declare global {
   interface Window {
     electronAPI: {
       oscSend: (path: string, value: number | number[] | string) => void;
+      onWindowVisibilityChange: (callback: (isVisible: boolean) => void) => void;
+      log: (level: 'log' | 'info' | 'warn' | 'error', ...args: any[]) => void;
+      notifyTrackingStarted: () => void;
     };
+  }
+}
+
+// Helper function to log to both console and Electron main process
+function appLog(level: 'log' | 'info' | 'warn' | 'error', ...args: any[]) {
+  console[level](...args);
+  if (window.electronAPI?.log) {
+    window.electronAPI.log(level, ...args);
   }
 }
 
@@ -42,6 +53,7 @@ function App() {
   const [isLoading, setIsLoading] = useState<boolean>(true)
   const [expressionMode, setExpressionMode] = useState<'visemeBlendshape' | 'blendshape'>('visemeBlendshape')
   const [autoCalibrate, setAutoCalibrate] = useState<boolean>(true)
+  const [isWindowVisible, setIsWindowVisible] = useState<boolean>(true)
   const [mouthDebug, setMouthDebug] = useState<{
     nHeight: number;
     nWidth: number;
@@ -55,6 +67,7 @@ function App() {
   const [blendshapeDebug, setBlendshapeDebug] = useState<{ name: string; value: number }[] | null>(null)
 
   const [videoElement, setVideoElement] = useState<HTMLVideoElement | null>(null);
+  const firstTrackingFrameRef = useRef<boolean>(false);
 
   const webcamRef = useRef<Webcam>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -90,8 +103,8 @@ function App() {
   const targetCalibrationRef = useRef<{ position: vec3; quaternion: quat } | null>(null)
   const transitionStartRef = useRef<{ position: vec3; quaternion: quat } | null>(null)
   const transitionProgressRef = useRef<number>(0)
-  const AUTO_CALIBRATE_THRESHOLD_MS = 3000
-  const TRANSITION_DURATION_MS = 2000
+  const AUTO_CALIBRATE_THRESHOLD_MS = 5000
+  const TRANSITION_DURATION_MS = 5000
   const POSITION_THRESHOLD = 0.01
   const ROTATION_THRESHOLD = 0.02
 
@@ -168,6 +181,8 @@ function App() {
 
   const handleSetMode = useCallback((mode: 'visemeBlendshape' | 'blendshape') => {
     setExpressionMode(mode)
+    localStorage.setItem('expressionMode', mode)
+    appLog('info', `Expression mode saved: ${mode}`)
   }, [])
 
   const handleResetCalibration = useCallback(() => {
@@ -197,22 +212,41 @@ function App() {
     faceResultsRef.current = faceResults
     handResultsRef.current = handResults
 
+    // Log first successful tracking frame
+    if (!firstTrackingFrameRef.current && (faceResults?.faceLandmarks?.length || handResults?.landmarks?.length)) {
+      firstTrackingFrameRef.current = true;
+      appLog('info', 'Tracking started - first frame processed successfully');
+      if (faceResults?.faceLandmarks?.length) {
+        appLog('info', '  ✓ Face detected');
+      }
+      if (handResults?.landmarks?.length) {
+        appLog('info', `  ✓ ${handResults.landmarks.length} hand(s) detected`);
+      }
+      // Notify Electron that tracking has started successfully
+      if (window.electronAPI?.notifyTrackingStarted) {
+        window.electronAPI.notifyTrackingStarted();
+      }
+    }
+
     // Throttle debug UI updates to every 5 frames to reduce React re-renders
     debugUpdateCounterRef.current = (debugUpdateCounterRef.current + 1) % 5
     const shouldUpdateDebug = debugUpdateCounterRef.current === 0
 
-    const canvasCtx = canvasRef.current?.getContext('2d')
-    if (canvasCtx) {
-      if (videoElement && videoElement.readyState >= 2) {
-        drawCanvas(canvasCtx, handResults || undefined, faceResults || undefined, videoElement)
-      } else {
-        // Fallback: draw a dark background when video is not ready
-        canvasCtx.fillStyle = '#16161a'
-        canvasCtx.fillRect(0, 0, WIDTH, HEIGHT)
-        canvasCtx.fillStyle = '#666'
-        canvasCtx.font = '20px sans-serif'
-        canvasCtx.textAlign = 'center'
-        canvasCtx.fillText('Waiting for camera...', WIDTH / 2, HEIGHT / 2)
+    // Skip rendering when window is hidden to save resources
+    if (isWindowVisible) {
+      const canvasCtx = canvasRef.current?.getContext('2d')
+      if (canvasCtx) {
+        if (videoElement && videoElement.readyState >= 2) {
+          drawCanvas(canvasCtx, handResults || undefined, faceResults || undefined, videoElement)
+        } else {
+          // Fallback: draw a dark background when video is not ready
+          canvasCtx.fillStyle = '#16161a'
+          canvasCtx.fillRect(0, 0, WIDTH, HEIGHT)
+          canvasCtx.fillStyle = '#666'
+          canvasCtx.font = '20px sans-serif'
+          canvasCtx.textAlign = 'center'
+          canvasCtx.fillText('Waiting for camera...', WIDTH / 2, HEIGHT / 2)
+        }
       }
     }
 
@@ -258,14 +292,22 @@ function App() {
         } else {
           z = -wrist2d.z * 300
         }
-        gizmo.position.set(x, y, z)
+
+        // Only update gizmo visuals when window is visible
+        if (isWindowVisible) {
+          gizmo.position.set(x, y, z)
+        }
 
         const lmForRot = hands3d[hi]?.map(p => ({ x: p.x, y: p.y, z: p.z }))
           ?? lm2d.map(p => ({ x: p.x, y: p.y, z: p.z }))
         const rotLabel = label ?? (hi === 0 ? 'Left' : 'Right')
 
         const { quaternion } = poseFromHandLandmarks(lmForRot, rotLabel)
-        gizmo.quaternion.set(quaternion[0], quaternion[1], quaternion[2], quaternion[3])
+
+        // Only update gizmo visuals when window is visible
+        if (isWindowVisible) {
+          gizmo.quaternion.set(quaternion[0], quaternion[1], quaternion[2], quaternion[3])
+        }
 
         const positionPath = `/avatar/parameters/Hand.${suffix}.Position`
         const rotationPath = `/avatar/parameters/Hand.${suffix}.Rotation`
@@ -339,8 +381,11 @@ function App() {
       const gizmoY = (1 - position[1]) * HEIGHT
       const gizmoZ = -position[2] * 300
 
-      st.faceGizmo.position.set(gizmoX, gizmoY, gizmoZ)
-      st.faceGizmo.quaternion.set(quaternion[0], quaternion[1], quaternion[2], quaternion[3])
+      // Only update gizmo visuals when window is visible
+      if (isWindowVisible) {
+        st.faceGizmo.position.set(gizmoX, gizmoY, gizmoZ)
+        st.faceGizmo.quaternion.set(quaternion[0], quaternion[1], quaternion[2], quaternion[3])
+      }
 
       // For OSC output, use normalized coordinates
       const normX = MIRROR_X ? 1 - position[0] : position[0]
@@ -410,11 +455,10 @@ function App() {
               if (stillTimeRef.current >= AUTO_CALIBRATE_THRESHOLD_MS) {
                 // Start transition
                 isTransitioningRef.current = true
-                // Extract only X-axis (pitch) rotation for calibration
-                const pitchOnlyQuat = extractPitchQuaternion(rawQuat)
+                // Use full rotation for calibration (all axes including X and Y)
                 targetCalibrationRef.current = {
                   position: vec3.clone(rawPos),
-                  quaternion: pitchOnlyQuat
+                  quaternion: quat.clone(rawQuat)
                 }
                 transitionStartRef.current = calibrationRef.current ? {
                   position: vec3.clone(calibrationRef.current.position),
@@ -562,7 +606,8 @@ function App() {
           })
 
           // Show all remembered blendshapes with current values (alphabetically sorted)
-          if (shouldUpdateDebug) {
+          // Skip debug UI updates when window is hidden
+          if (isWindowVisible && shouldUpdateDebug) {
             const allDetectedBlendshapes = Array.from(detectedBlendshapeNamesRef.current)
               .map(name => {
                 const bs = blendshapes.find(b => b.categoryName === name)
@@ -647,7 +692,8 @@ function App() {
         sendParam('/avatar/parameters/Blendshapes/BrowInnerUp', [getBlendshapeValue('browInnerUp')])
         sendParam('/avatar/parameters/Blendshapes/CheekPuff', [getBlendshapeValue('cheekPuff')])
 
-        if (shouldUpdateDebug) {
+        // Skip debug UI updates when window is hidden
+        if (isWindowVisible && shouldUpdateDebug) {
           setMouthDebug({
             nHeight,
             nWidth,
@@ -679,9 +725,18 @@ function App() {
       sendParam('/avatar/parameters/Blendshapes/BrowInnerUp', [0.0001])
       sendParam('/avatar/parameters/Blendshapes/CheekPuff', [0.0001])
     }
-  }, [threeStateRef, videoElement, sendParam])
+  }, [threeStateRef, videoElement, sendParam, isWindowVisible])
 
-  // Load calibration on startup
+  // Listen for window visibility changes
+  useEffect(() => {
+    if (window.electronAPI && window.electronAPI.onWindowVisibilityChange) {
+      window.electronAPI.onWindowVisibilityChange((isVisible) => {
+        setIsWindowVisible(isVisible)
+      })
+    }
+  }, [])
+
+  // Load calibration and settings on startup
   useEffect(() => {
     const savedHeadCalib = localStorage.getItem('headCalibration')
     if (savedHeadCalib) {
@@ -718,16 +773,51 @@ function App() {
         referenceDepth: DEFAULT_HAND_CALIBRATION.referenceDepth
       }
     }
+
+    // Load expression mode
+    const savedExpressionMode = localStorage.getItem('expressionMode')
+    if (savedExpressionMode === 'visemeBlendshape' || savedExpressionMode === 'blendshape') {
+      setExpressionMode(savedExpressionMode)
+      appLog('info', `Loaded expression mode: ${savedExpressionMode}`)
+    }
+
+    // Load auto calibrate setting
+    const savedAutoCalibrate = localStorage.getItem('autoCalibrate')
+    if (savedAutoCalibrate !== null) {
+      setAutoCalibrate(savedAutoCalibrate === 'true')
+      appLog('info', `Loaded auto calibrate: ${savedAutoCalibrate}`)
+    }
   }, [])
 
   // Camera setup
   useEffect(() => {
     const updateDevices = async () => {
-      const deviceInfos = await navigator.mediaDevices.enumerateDevices()
-      const videoDevices = deviceInfos.filter(d => d.kind === 'videoinput')
-      setDevices(videoDevices)
-      if (videoDevices.length > 0 && !selectedDeviceId) {
-        setSelectedDeviceId(videoDevices[0].deviceId)
+      try {
+        appLog('info', 'Enumerating camera devices...');
+        const deviceInfos = await navigator.mediaDevices.enumerateDevices()
+        const videoDevices = deviceInfos.filter(d => d.kind === 'videoinput')
+        appLog('info', `Found ${videoDevices.length} camera device(s)`);
+        videoDevices.forEach((device, index) => {
+          appLog('info', `  Camera ${index + 1}: ${device.label || 'Unknown device'}`);
+        });
+        setDevices(videoDevices)
+
+        if (videoDevices.length > 0 && !selectedDeviceId) {
+          // Try to load saved camera device
+          const savedDeviceId = localStorage.getItem('selectedCameraDeviceId')
+          const savedDevice = savedDeviceId ? videoDevices.find(d => d.deviceId === savedDeviceId) : null
+
+          if (savedDevice) {
+            setSelectedDeviceId(savedDevice.deviceId)
+            appLog('info', `Loaded saved camera: ${savedDevice.label || 'Unknown device'}`);
+          } else {
+            // Use first available device
+            setSelectedDeviceId(videoDevices[0].deviceId)
+            appLog('info', `Selected default camera: ${videoDevices[0].label || 'Unknown device'}`);
+          }
+        }
+      } catch (err) {
+        appLog('error', 'Failed to enumerate camera devices:', err);
       }
     }
     updateDevices()
@@ -758,7 +848,12 @@ function App() {
         onUserMedia={() => {
           if (webcamRef.current?.video) {
             setVideoElement(webcamRef.current.video);
+            const deviceName = devices.find(d => d.deviceId === selectedDeviceId)?.label || 'Unknown device';
+            appLog('info', `Camera stream started successfully: ${deviceName}`);
           }
+        }}
+        onUserMediaError={(err) => {
+          appLog('error', 'Camera access failed:', err);
         }}
       />
       <canvas
@@ -834,7 +929,12 @@ function App() {
       <ControlPanel
         devices={devices}
         selectedDeviceId={selectedDeviceId}
-        onDeviceChange={setSelectedDeviceId}
+        onDeviceChange={(deviceId) => {
+          setSelectedDeviceId(deviceId)
+          localStorage.setItem('selectedCameraDeviceId', deviceId)
+          const device = devices.find(d => d.deviceId === deviceId)
+          appLog('info', `Camera changed and saved: ${device?.label || 'Unknown device'}`)
+        }}
         onCalibrate={handleCalibrate}
         onHandCalibrate={handleHandCalibrate}
         onResetCalibration={handleResetCalibration}
@@ -844,7 +944,11 @@ function App() {
         expressionMode={expressionMode}
         onSetMode={handleSetMode}
         autoCalibrate={autoCalibrate}
-        onAutoCalibrateChange={setAutoCalibrate}
+        onAutoCalibrateChange={(enabled) => {
+          setAutoCalibrate(enabled)
+          localStorage.setItem('autoCalibrate', String(enabled))
+          appLog('info', `Auto calibrate saved: ${enabled}`)
+        }}
       />
     </div>
   )

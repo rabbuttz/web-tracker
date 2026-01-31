@@ -7,6 +7,14 @@ import {
   type HandLandmarkerResult,
 } from '@mediapipe/tasks-vision';
 
+// Helper function to log to both console and Electron main process
+function mpLog(level: 'log' | 'info' | 'warn' | 'error', ...args: any[]) {
+  console[level](...args);
+  if (typeof window !== 'undefined' && (window as any).electronAPI?.log) {
+    (window as any).electronAPI.log(level, ...args);
+  }
+}
+
 export function useMediaPipe(
   videoElement: HTMLVideoElement | null,
   onResults: (faceResult: FaceLandmarkerResult | null, handResult: HandLandmarkerResult | null) => void,
@@ -20,9 +28,7 @@ export function useMediaPipe(
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    console.log('useMediaPipe effect triggered, videoElement:', videoElement?.readyState, 'deviceId:', deviceId);
     if (!deviceId || !videoElement) {
-      console.log('Early return: no deviceId or videoElement');
       return;
     }
 
@@ -31,16 +37,17 @@ export function useMediaPipe(
 
     const init = async () => {
       try {
-        console.log('Initializing MediaPipe...');
+        mpLog('info', 'Initializing MediaPipe...');
         onLoadingChange?.(true);
 
         // Use unpkg instead of jsDelivr for better WASM file availability
         const wasmPath = 'https://unpkg.com/@mediapipe/tasks-vision@0.10.32/wasm';
-        console.log('Loading WASM from:', wasmPath);
+        mpLog('info', 'Loading WASM files...');
 
         const vision = await FilesetResolver.forVisionTasks(wasmPath);
-        console.log('FilesetResolver loaded successfully');
+        mpLog('info', '✓ WASM files loaded successfully');
 
+        mpLog('info', 'Downloading MediaPipe models (face_landmarker + hand_landmarker)...');
         const [faceLandmarker, handLandmarker] = await Promise.all([
           FaceLandmarker.createFromOptions(vision, {
             baseOptions: {
@@ -61,7 +68,7 @@ export function useMediaPipe(
             numHands: 2,
           }),
         ]);
-        console.log('Landmarkers created successfully');
+        mpLog('info', '✓ MediaPipe models loaded successfully');
 
         if (!isRunning) {
           faceLandmarker.close();
@@ -74,6 +81,7 @@ export function useMediaPipe(
         setIsInitialized(true);
         setError(null);
         onLoadingChange?.(false);
+        mpLog('info', '✓ MediaPipe initialization complete - ready for tracking');
 
         const processFrame = () => {
           if (!isRunning) return;
@@ -91,7 +99,10 @@ export function useMediaPipe(
         processFrame();
       } catch (err) {
         const errorMessage = err instanceof Error ? err.message : 'Unknown error';
-        console.error('Error initializing MediaPipe:', err);
+        mpLog('error', 'MediaPipe initialization failed:', errorMessage);
+        if (err instanceof Error && err.stack) {
+          mpLog('error', 'Stack trace:', err.stack);
+        }
         setError(errorMessage);
         onLoadingChange?.(false);
       }
@@ -100,7 +111,7 @@ export function useMediaPipe(
     init();
 
     return () => {
-      console.log('Cleaning up useMediaPipe');
+      mpLog('info', 'Stopping MediaPipe tracking');
       isRunning = false;
       cancelAnimationFrame(rafId);
       if (faceLandmarkerRef.current) {

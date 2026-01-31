@@ -71,7 +71,7 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
 						onChange={(e) => onAutoCalibrateChange(e.target.checked)}
 						className="glass-checkbox"
 					/>
-					<span>Auto Calibrate (3s still)</span>
+					<span>Auto Calibrate (5s still)</span>
 				</label>
 			</div>
 
