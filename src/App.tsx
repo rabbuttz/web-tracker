@@ -68,6 +68,12 @@ function App() {
   
   const detectedBlendshapeNamesRef = useRef<Set<string>>(new Set())
   const debugUpdateCounterRef = useRef(0)
+  const expressionModeRef = useRef<'viseme' | 'visemeBlendshape' | 'blendshape'>(expressionMode)
+  
+  // Keep expressionModeRef in sync with state
+  useEffect(() => {
+    expressionModeRef.current = expressionMode
+  }, [expressionMode])
 
   const threeStateRef = useThreeManager(threeCanvasRef.current)
 
@@ -289,7 +295,7 @@ function App() {
       
       // Convert to screen coordinates
       const gizmoX = (MIRROR_X ? 1 - position[0] : position[0]) * WIDTH
-      const gizmoY = position[1] * HEIGHT
+      const gizmoY = (1 - position[1]) * HEIGHT
       const gizmoZ = -position[2] * 300
       
       st.faceGizmo.position.set(gizmoX, gizmoY, gizmoZ)
@@ -346,7 +352,7 @@ function App() {
         return bs?.score ?? 0
       }
 
-      if (expressionMode === 'blendshape') {
+      if (expressionModeRef.current === 'blendshape') {
         // Perfect Sync Mode: Calculate aiueo from blendshapes and send to legacy paths
         const jawOpen = getBlendshapeValue('jawOpen')
         const mouthOpen = getBlendshapeValue('mouthOpen')
@@ -418,7 +424,7 @@ function App() {
             setBlendshapeDebug(allDetectedBlendshapes)
           }
         }
-      } else if (expressionMode === 'visemeBlendshape') {
+      } else if (expressionModeRef.current === 'visemeBlendshape') {
         // Viseme (Blendshape-based): Calculate aiueo from blendshapes
         const jawOpen = getBlendshapeValue('jawOpen')
         const mouthOpen = getBlendshapeValue('mouthOpen')
@@ -574,8 +580,17 @@ function App() {
       sendParam('/avatar/parameters/ou', [0.0001])
       sendParam('/avatar/parameters/E', [0.0001])
       sendParam('/avatar/parameters/oh', [0.0001])
+      // Reset blendshape parameters when tracking is lost
+      sendParam('/avatar/parameters/Blendshapes/JawOpen', [0.0001])
+      sendParam('/avatar/parameters/Blendshapes/MouthOpen', [0.0001])
+      sendParam('/avatar/parameters/Blendshapes/MouthPucker', [0.0001])
+      sendParam('/avatar/parameters/Blendshapes/MouthSmile', [0.0001])
+      sendParam('/avatar/parameters/Blendshapes/EyeBlinkLeft', [0.0001])
+      sendParam('/avatar/parameters/Blendshapes/EyeBlinkRight', [0.0001])
+      sendParam('/avatar/parameters/Blendshapes/BrowInnerUp', [0.0001])
+      sendParam('/avatar/parameters/Blendshapes/CheekPuff', [0.0001])
     }
-  }, [threeStateRef, videoElement, sendParam, expressionMode])
+  }, [threeStateRef, videoElement, sendParam])
 
   // Camera setup
   useEffect(() => {
