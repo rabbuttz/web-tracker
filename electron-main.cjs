@@ -1,15 +1,148 @@
-const { app, BrowserWindow, ipcMain } = require('electron');
+const { app, BrowserWindow, ipcMain, Tray, Menu } = require('electron');
 const path = require('path');
 const osc = require('node-osc');
-const { spawn } = require('child_process');
+const { spawn, exec } = require('child_process');
+const AutoLaunch = require('auto-launch');
 
 const oscClient = new osc.Client('127.0.0.1', 9000);
 let serverProcess = null;
+let resoniteMonitorInterval = null;
+let mainWindow = null;
+let tray = null;
+let manuallyOpened = false;
+const RESONITE_PROCESS_NAME = 'Resonite.exe';
+const MONITOR_INTERVAL_MS = 5000;
+
+const autoLauncher = new AutoLaunch({
+    name: 'WebCamTracker4Resonite',
+    path: app.getPath('exe'),
+});
+
+async function isResoniteRunning() {
+    return new Promise((resolve) => {
+        if (process.platform === 'win32') {
+            exec(`tasklist /FI "IMAGENAME eq ${RESONITE_PROCESS_NAME}" /NH`, (err, stdout) => {
+                if (err) {
+                    resolve(false);
+                    return;
+                }
+                resolve(stdout.toLowerCase().includes(RESONITE_PROCESS_NAME.toLowerCase()));
+            });
+        } else {
+            exec(`pgrep -x Resonite`, (err, stdout) => {
+                resolve(!err && stdout.trim().length > 0);
+            });
+        }
+    });
+}
+
+function startResoniteMonitor() {
+    if (resoniteMonitorInterval) {
+        clearInterval(resoniteMonitorInterval);
+    }
+
+    console.log('[Electron] Starting Resonite monitor...');
+
+    resoniteMonitorInterval = setInterval(async () => {
+        const running = await isResoniteRunning();
+
+        if (running && !mainWindow) {
+            console.log('[Electron] Resonite started. Opening window...');
+            if (tray) {
+                tray.setToolTip('WebCamTracker4Resonite - Running');
+            }
+            manuallyOpened = false;
+            startServer();
+            createWindow();
+        } else if (!running && mainWindow && !manuallyOpened) {
+            console.log('[Electron] Resonite stopped. Closing window...');
+            if (tray) {
+                tray.setToolTip('WebCamTracker4Resonite - Waiting for Resonite...');
+            }
+            killServerProcess();
+            if (mainWindow) {
+                mainWindow.close();
+                mainWindow = null;
+            }
+        }
+    }, MONITOR_INTERVAL_MS);
+}
+
+function stopResoniteMonitor() {
+    if (resoniteMonitorInterval) {
+        clearInterval(resoniteMonitorInterval);
+        resoniteMonitorInterval = null;
+        console.log('[Electron] Resonite monitor stopped.');
+    }
+}
+
+function createTray() {
+    try {
+        const { nativeImage } = require('electron');
+        const iconPath = path.join(__dirname, 'build', 'icon.png');
+        const fs = require('fs');
+
+        let icon;
+        if (fs.existsSync(iconPath)) {
+            icon = nativeImage.createFromPath(iconPath);
+        } else {
+            icon = nativeImage.createEmpty();
+        }
+
+        tray = new Tray(icon);
+
+        const contextMenu = Menu.buildFromTemplate([
+            {
+                label: 'Show Window',
+                click: () => {
+                    if (!mainWindow) {
+                        manuallyOpened = true;
+                        startServer();
+                        createWindow();
+                    } else {
+                        mainWindow.show();
+                        mainWindow.focus();
+                    }
+                }
+            },
+            {
+                label: 'Quit',
+                click: () => {
+                    app.quit();
+                }
+            }
+        ]);
+
+        tray.setToolTip('WebCamTracker4Resonite - Waiting for Resonite...');
+        tray.setContextMenu(contextMenu);
+
+        tray.on('click', () => {
+            if (!mainWindow) {
+                manuallyOpened = true;
+                startServer();
+                createWindow();
+            } else {
+                mainWindow.show();
+                mainWindow.focus();
+            }
+        });
+    } catch (err) {
+        console.error('[Electron] Failed to create tray:', err);
+    }
+}
 
 function createWindow() {
-    const win = new BrowserWindow({
+    if (mainWindow) {
+        mainWindow.focus();
+        return;
+    }
+
+    const iconPath = path.join(__dirname, 'build', 'icon.png');
+
+    mainWindow = new BrowserWindow({
         width: 1280,
         height: 720,
+        icon: iconPath,
         webPreferences: {
             preload: path.join(__dirname, 'preload.js'),
             nodeIntegration: false,
@@ -19,14 +152,18 @@ function createWindow() {
         autoHideMenuBar: true,
     });
 
-    // check if we are in dev mode
+    mainWindow.on('closed', () => {
+        mainWindow = null;
+        manuallyOpened = false;
+    });
+
     const isDev = process.env.NODE_ENV === 'development';
 
     if (isDev) {
-        win.loadURL('http://localhost:5173');
-        win.webContents.openDevTools();
+        mainWindow.loadURL('http://localhost:5173');
+        mainWindow.webContents.openDevTools();
     } else {
-        win.loadFile(path.join(__dirname, 'dist', 'index.html'));
+        mainWindow.loadFile(path.join(__dirname, 'dist', 'index.html'));
     }
 }
 
@@ -53,13 +190,31 @@ function startServer() {
     }
 }
 
-app.whenReady().then(() => {
-    startServer();
-    createWindow();
+app.whenReady().then(async () => {
+    try {
+        await autoLauncher.enable();
+        console.log('[Electron] Auto-launch enabled');
+    } catch (err) {
+        console.error('[Electron] Failed to enable auto-launch:', err);
+    }
+
+    createTray();
+
+    const resoniteRunning = await isResoniteRunning();
+
+    if (resoniteRunning) {
+        console.log('[Electron] Resonite is running. Starting app...');
+        startServer();
+        createWindow();
+    } else {
+        console.log('[Electron] Resonite is not running. Waiting in background...');
+    }
+
+    startResoniteMonitor();
 
     app.on('activate', () => {
-        if (BrowserWindow.getAllWindows().length === 0) {
-            createWindow();
+        if (mainWindow) {
+            mainWindow.show();
         }
     });
 });
@@ -91,19 +246,18 @@ function killServerProcess() {
 }
 
 app.on('window-all-closed', () => {
-    killServerProcess();
-
-    if (process.platform !== 'darwin') {
-        app.quit();
-    }
+    // Don't quit the app when all windows are closed
+    // Keep running in background to monitor Resonite
+    console.log('[Electron] All windows closed. Running in background...');
 });
 
 app.on('before-quit', (event) => {
+    stopResoniteMonitor();
+
     if (serverProcess) {
-        event.preventDefault(); // Wait for server to stop
+        event.preventDefault();
         killServerProcess();
 
-        // Give it a moment, then quit
         setTimeout(() => {
             app.exit(0);
         }, 500);

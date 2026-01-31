@@ -1,6 +1,6 @@
 {
-  "name": "web-tracker",
-  "productName": "Web Tracker",
+  "name": "webcam-tracker-4-resonite",
+  "productName": "WebCamTracker4Resonite",
   "private": true,
   "version": "1.0.0",
   "description": "MediaPipe-based hand and face tracking application with OSC output",
@@ -19,15 +19,20 @@
   },
   "dependencies": {
     "@mediapipe/tasks-vision": "^0.10.22",
+    "@mediapipe/camera_utils": "^0.3.1675466862",
+    "@mediapipe/drawing_utils": "^0.3.1675466124",
+    "@mediapipe/face_mesh": "^0.4.1633559619",
+    "@mediapipe/hands": "^0.4.1675469240",
+    "auto-launch": "^5.0.6",
+    "express": "^4.21.2",
     "gl-matrix": "^3.4.4",
+    "node-osc": "^2.1.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "react-webcam": "^7.2.0",
     "three": "^0.164.1",
-    "node-osc": "^2.1.0",
-    "express": "^4.21.2",
-    "ws": "^8.18.0",
-    "uuid": "^11.0.5"
+    "uuid": "^11.0.5",
+    "ws": "^8.18.0"
   },
   "devDependencies": {
     "@eslint/js": "^9.25.0",
@@ -50,8 +55,8 @@
   },
   "packageManager": "pnpm@9.15.2+sha512.93e57b0126f0df74ce6bff29680394c0ba54ec47246b9cf321f0121d8d9bb03f750a705f24edc3c1180853afd7c2c3b94196d0a3d53d3e069d9e2793ef11f321",
   "build": {
-    "appId": "com.rabbuttz.webtracker",
-    "productName": "Web Tracker",
+    "appId": "com.rabbuttz.webcamtracker4resonite",
+    "productName": "WebCamTracker4Resonite",
     "directories": {
       "output": "release",
       "buildResources": "build"
@@ -64,6 +69,7 @@
       "node_modules/**/*"
     ],
     "win": {
+      "icon": "build/icon.png",
       "target": [
         {
           "target": "nsis",

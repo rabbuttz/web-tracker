@@ -6,6 +6,7 @@ interface ControlPanelProps {
 	onDeviceChange: (deviceId: string) => void;
 	onCalibrate: () => void;
 	onHandCalibrate: () => void;
+	onResetCalibration: () => void;
 	handCalibCountdown: number | null;
 	onSetupFaceTrack: (username: string, port: number) => void;
 	setupStatus: string;
@@ -29,6 +30,7 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
 	onDeviceChange,
 	onCalibrate,
 	onHandCalibrate,
+	onResetCalibration,
 	handCalibCountdown,
 	onSetupFaceTrack,
 	setupStatus,
@@ -110,6 +112,12 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
 					{handCalibCountdown !== null
 						? `Hand Calibrate (${handCalibCountdown})`
 						: 'Hand Calibrate'}
+				</button>
+			</div>
+
+			<div className="control-group">
+				<button className="glass-button reset-button" onClick={onResetCalibration}>
+					Reset All Calibration
 				</button>
 			</div>
 
@@ -292,47 +300,13 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
 					background: rgba(120, 80, 200, 0.7);
 					border-color: rgba(150, 100, 255, 0.5);
 				}
-				.toggle-container {
-					display: flex;
-					align-items: center;
-					gap: 12px;
+				.reset-button {
+					background: rgba(180, 60, 60, 0.5);
+					border-color: rgba(255, 100, 100, 0.3);
 				}
-				.toggle-label {
-					font-size: 12px;
-					color: #888;
-					transition: color 0.3s ease;
-				}
-				.toggle-label.active {
-					color: #fff;
-					font-weight: 600;
-				}
-				.toggle-switch {
-					width: 50px;
-					height: 26px;
-					background: rgba(60, 100, 180, 0.5);
-					border-radius: 13px;
-					position: relative;
-					cursor: pointer;
-					transition: background 0.3s ease;
-					border: 1px solid rgba(100, 150, 255, 0.3);
-				}
-				.toggle-switch.blendshapes {
-					background: rgba(60, 180, 120, 0.6);
-					border-color: rgba(100, 255, 150, 0.4);
-				}
-				.toggle-slider {
-					width: 22px;
-					height: 22px;
-					background: white;
-					border-radius: 50%;
-					position: absolute;
-					top: 1px;
-					left: 2px;
-					transition: transform 0.3s ease;
-					box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
-				}
-				.toggle-switch.blendshapes .toggle-slider {
-					transform: translateX(24px);
+				.reset-button:hover {
+					background: rgba(200, 80, 80, 0.7);
+					border-color: rgba(255, 100, 100, 0.5);
 				}
 				.debug-section {
 					margin-top: 12px;
@@ -353,55 +327,55 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
 					border-radius: 4px;
 					font-size: 11px;
 				}
-			.debug-item.viseme {
-				background: rgba(100, 60, 180, 0.2);
-			}
-			.blendshape-grid {
-				max-height: 200px;
-				overflow-y: auto;
-			}
-			.debug-item.blendshape {
-				background: rgba(60, 180, 120, 0.2);
-			}
-			.mode-toggle-container {
-				margin-top: 8px;
-			}
-			.mode-button-group {
-				display: flex;
-				gap: 4px;
-				flex-wrap: wrap;
-			}
-			.mode-button {
-				flex: 1;
-				min-width: 80px;
-				background: rgba(40, 40, 50, 0.6);
-				border: 1px solid rgba(255, 255, 255, 0.1);
-				border-radius: 6px;
-				padding: 8px 6px;
-				color: #888;
-				font-size: 11px;
-				font-weight: 500;
-				cursor: pointer;
-				transition: all 0.2s ease;
-			}
-			.mode-button:hover {
-				background: rgba(60, 100, 180, 0.4);
-				border-color: rgba(100, 150, 255, 0.3);
-				color: #ccc;
-			}
-			.mode-button.active {
-				background: rgba(100, 60, 180, 0.6);
-				border-color: rgba(150, 100, 255, 0.5);
-				color: #fff;
-				font-weight: 600;
-			}
-			.mode-description {
-				margin-top: 6px;
-				font-size: 10px;
-				color: #666;
-				font-style: italic;
-				text-align: center;
-			}
+				.debug-item.viseme {
+					background: rgba(100, 60, 180, 0.2);
+				}
+				.blendshape-grid {
+					max-height: 200px;
+					overflow-y: auto;
+				}
+				.debug-item.blendshape {
+					background: rgba(60, 180, 120, 0.2);
+				}
+				.mode-toggle-container {
+					margin-top: 8px;
+				}
+				.mode-button-group {
+					display: flex;
+					gap: 4px;
+					flex-wrap: wrap;
+				}
+				.mode-button {
+					flex: 1;
+					min-width: 80px;
+					background: rgba(40, 40, 50, 0.6);
+					border: 1px solid rgba(255, 255, 255, 0.1);
+					border-radius: 6px;
+					padding: 8px 6px;
+					color: #888;
+					font-size: 11px;
+					font-weight: 500;
+					cursor: pointer;
+					transition: all 0.2s ease;
+				}
+				.mode-button:hover {
+					background: rgba(60, 100, 180, 0.4);
+					border-color: rgba(100, 150, 255, 0.3);
+					color: #ccc;
+				}
+				.mode-button.active {
+					background: rgba(100, 60, 180, 0.6);
+					border-color: rgba(150, 100, 255, 0.5);
+					color: #fff;
+					font-weight: 600;
+				}
+				.mode-description {
+					margin-top: 6px;
+					font-size: 10px;
+					color: #666;
+					font-style: italic;
+					text-align: center;
+				}
 				.debug-label {
 					color: #aaa;
 					font-weight: 500;
