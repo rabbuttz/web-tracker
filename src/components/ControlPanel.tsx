@@ -8,8 +8,6 @@ interface ControlPanelProps {
 	onHandCalibrate: () => void;
 	onResetCalibration: () => void;
 	handCalibCountdown: number | null;
-	onSetupFaceTrack: (username: string, port: number) => void;
-	setupStatus: string;
 	mouthDebug: {
 		nHeight: number;
 		nWidth: number;
@@ -22,6 +20,8 @@ interface ControlPanelProps {
 	blendshapeDebug: { name: string; value: number }[] | null;
 	expressionMode: 'visemeBlendshape' | 'blendshape';
 	onSetMode: (mode: 'visemeBlendshape' | 'blendshape') => void;
+	autoCalibrate: boolean;
+	onAutoCalibrateChange: (enabled: boolean) => void;
 }
 
 export const ControlPanel: React.FC<ControlPanelProps> = ({
@@ -32,55 +32,15 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
 	onHandCalibrate,
 	onResetCalibration,
 	handCalibCountdown,
-	onSetupFaceTrack,
-	setupStatus,
 	mouthDebug,
 	blendshapeDebug,
 	expressionMode,
 	onSetMode,
+	autoCalibrate,
+	onAutoCalibrateChange,
 }) => {
-	const [username, setUsername] = useState('Rabbuttz');
-	const [port, setPort] = useState('40160');
-
-	const handleSetup = () => {
-		onSetupFaceTrack(username, parseInt(port));
-	};
-
 	return (
 		<div className="controls-panel">
-			<div className="control-group">
-				<label htmlFor="username-input">Resonite Username</label>
-				<input
-					id="username-input"
-					type="text"
-					value={username}
-					onChange={(e) => setUsername(e.target.value)}
-					className="glass-input"
-					placeholder="Enter username"
-				/>
-			</div>
-
-			<div className="control-group">
-				<label htmlFor="port-input">Resonite Port</label>
-				<input
-					id="port-input"
-					type="number"
-					value={port}
-					onChange={(e) => setPort(e.target.value)}
-					className="glass-input"
-					placeholder="40160"
-				/>
-			</div>
-
-			<div className="control-group">
-				<button className="glass-button setup-button" onClick={handleSetup}>
-					Setup FaceTrack
-				</button>
-				{setupStatus && (
-					<div className="status-text">{setupStatus}</div>
-				)}
-			</div>
-
 			<div className="control-group">
 				<label htmlFor="camera-select">Camera Source</label>
 				<select
@@ -101,6 +61,18 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
 				<button className="glass-button" onClick={onCalibrate}>
 					Head Calibrate
 				</button>
+			</div>
+
+			<div className="control-group">
+				<label className="checkbox-label">
+					<input
+						type="checkbox"
+						checked={autoCalibrate}
+						onChange={(e) => onAutoCalibrateChange(e.target.checked)}
+						className="glass-checkbox"
+					/>
+					<span>Auto Calibrate (3s still)</span>
+				</label>
 			</div>
 
 			<div className="control-group">
@@ -307,6 +279,21 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
 				.reset-button:hover {
 					background: rgba(200, 80, 80, 0.7);
 					border-color: rgba(255, 100, 100, 0.5);
+				}
+				.checkbox-label {
+					display: flex;
+					align-items: center;
+					gap: 8px;
+					cursor: pointer;
+					font-size: 13px;
+					color: #ddd;
+					user-select: none;
+				}
+				.glass-checkbox {
+					width: 18px;
+					height: 18px;
+					cursor: pointer;
+					accent-color: rgba(100, 150, 255, 0.8);
 				}
 				.debug-section {
 					margin-top: 12px;

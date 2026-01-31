@@ -15,6 +15,18 @@ interface HandCalibration {
   referenceDepth: number;
 }
 
+// Default calibration values (used when no saved calibration exists)
+const DEFAULT_HEAD_CALIBRATION = {
+  position: [0.4859048128128052, 0.48299509286880493, -0.04700769856572151] as [number, number, number],
+  quaternion: [-0.03367241099476814, -0.016153844073414803, 0.006220859009772539, 0.9992830157279968] as [number, number, number, number]
+};
+
+const DEFAULT_HAND_CALIBRATION = {
+  leftHandSize: 0.40479355842178694,
+  rightHandSize: 0.4208306103774612,
+  referenceDepth: 0.5
+};
+
 declare global {
   interface Window {
     electronAPI: {
@@ -27,9 +39,9 @@ function App() {
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([])
   const [selectedDeviceId, setSelectedDeviceId] = useState<string>('')
   const [handCalibCountdown, setHandCalibCountdown] = useState<number | null>(null)
-  const [setupStatus, setSetupStatus] = useState<string>('')
   const [isLoading, setIsLoading] = useState<boolean>(true)
   const [expressionMode, setExpressionMode] = useState<'visemeBlendshape' | 'blendshape'>('visemeBlendshape')
+  const [autoCalibrate, setAutoCalibrate] = useState<boolean>(true)
   const [mouthDebug, setMouthDebug] = useState<{
     nHeight: number;
     nWidth: number;
@@ -70,6 +82,19 @@ function App() {
   const debugUpdateCounterRef = useRef(0)
   const expressionModeRef = useRef<'visemeBlendshape' | 'blendshape'>(expressionMode)
 
+  // Auto-calibration refs
+  const lastHeadPoseRef = useRef<{ position: vec3; quaternion: quat } | null>(null)
+  const stillTimeRef = useRef<number>(0)
+  const lastUpdateTimeRef = useRef<number>(Date.now())
+  const isTransitioningRef = useRef<boolean>(false)
+  const targetCalibrationRef = useRef<{ position: vec3; quaternion: quat } | null>(null)
+  const transitionStartRef = useRef<{ position: vec3; quaternion: quat } | null>(null)
+  const transitionProgressRef = useRef<number>(0)
+  const AUTO_CALIBRATE_THRESHOLD_MS = 3000
+  const TRANSITION_DURATION_MS = 2000
+  const POSITION_THRESHOLD = 0.01
+  const ROTATION_THRESHOLD = 0.02
+
   // Keep expressionModeRef in sync with state
   useEffect(() => {
     expressionModeRef.current = expressionMode
@@ -78,6 +103,17 @@ function App() {
   const threeStateRef = useThreeManager(threeCanvasRef.current)
 
   const formatVec = (v: number[]) => `[${v.map(n => n.toFixed(4)).join(';')}]`
+
+  // Extract pitch (X-axis rotation) from quaternion
+  const extractPitchQuaternion = (q: quat): quat => {
+    // Convert quaternion to euler angles
+    const sinp = 2 * (q[3] * q[0] - q[2] * q[1])
+    const pitch = Math.abs(sinp) >= 1 ? Math.sign(sinp) * Math.PI / 2 : Math.asin(sinp)
+
+    // Create quaternion with only pitch (X-axis rotation)
+    const halfPitch = pitch / 2
+    return quat.fromValues(Math.sin(halfPitch), 0, 0, Math.cos(halfPitch))
+  }
 
   const calculateHandSize = (landmarks: { x: number; y: number; z: number }[]) => {
     const wrist = landmarks[HAND_LM.WRIST]
@@ -127,17 +163,6 @@ function App() {
         position: Array.from(calibrationRef.current.position),
         quaternion: Array.from(calibrationRef.current.quaternion)
       }))
-    }
-  }, [])
-
-  const handleSetupFaceTrack = useCallback(async (username: string, port: number) => {
-    setSetupStatus('Setting up...');
-    try {
-      const response = await fetch(`http://localhost:3000/setup-facetrack?username=${encodeURIComponent(username)}&port=${port}`);
-      const text = await response.text();
-      setSetupStatus(text);
-    } catch (error) {
-      setSetupStatus(`Error: ${error instanceof Error ? error.message : String(error)}`);
     }
   }, [])
 
@@ -328,6 +353,87 @@ function App() {
       rawHeadPoseRef.current = { position: rawPos, quaternion: rawQuat }
       headPoseRef.current = { position: vec3.clone(rawPos), quaternion: quat.clone(rawQuat) }
 
+      // Auto-calibration logic
+      if (autoCalibrate) {
+        const now = Date.now()
+        const deltaTime = now - lastUpdateTimeRef.current
+        lastUpdateTimeRef.current = now
+
+        if (lastHeadPoseRef.current) {
+          const posChange = vec3.distance(rawPos, lastHeadPoseRef.current.position)
+          const quatChange = Math.abs(1 - Math.abs(quat.dot(rawQuat, lastHeadPoseRef.current.quaternion)))
+
+          // Check if moving during transition
+          if (isTransitioningRef.current && (posChange >= POSITION_THRESHOLD || quatChange >= ROTATION_THRESHOLD)) {
+            // Cancel transition
+            isTransitioningRef.current = false
+            targetCalibrationRef.current = null
+            transitionStartRef.current = null
+            transitionProgressRef.current = 0
+            stillTimeRef.current = 0
+          }
+
+          // Update transition progress
+          if (isTransitioningRef.current && targetCalibrationRef.current && transitionStartRef.current) {
+            transitionProgressRef.current += deltaTime / TRANSITION_DURATION_MS
+
+            if (transitionProgressRef.current >= 1.0) {
+              // Transition complete
+              calibrationRef.current = {
+                position: vec3.clone(targetCalibrationRef.current.position),
+                quaternion: quat.clone(targetCalibrationRef.current.quaternion)
+              }
+              localStorage.setItem('headCalibration', JSON.stringify({
+                position: Array.from(calibrationRef.current.position),
+                quaternion: Array.from(calibrationRef.current.quaternion)
+              }))
+              isTransitioningRef.current = false
+              targetCalibrationRef.current = null
+              transitionStartRef.current = null
+              transitionProgressRef.current = 0
+            } else {
+              // Interpolate calibration
+              const t = Math.min(1.0, transitionProgressRef.current)
+              const smoothT = t * t * (3 - 2 * t) // Smoothstep
+
+              calibrationRef.current = {
+                position: vec3.lerp(vec3.create(), transitionStartRef.current.position, targetCalibrationRef.current.position, smoothT),
+                quaternion: quat.slerp(quat.create(), transitionStartRef.current.quaternion, targetCalibrationRef.current.quaternion, smoothT)
+              }
+            }
+          }
+
+          // Detect stillness and start transition
+          if (!isTransitioningRef.current) {
+            if (posChange < POSITION_THRESHOLD && quatChange < ROTATION_THRESHOLD) {
+              stillTimeRef.current += deltaTime
+              if (stillTimeRef.current >= AUTO_CALIBRATE_THRESHOLD_MS) {
+                // Start transition
+                isTransitioningRef.current = true
+                // Extract only X-axis (pitch) rotation for calibration
+                const pitchOnlyQuat = extractPitchQuaternion(rawQuat)
+                targetCalibrationRef.current = {
+                  position: vec3.clone(rawPos),
+                  quaternion: pitchOnlyQuat
+                }
+                transitionStartRef.current = calibrationRef.current ? {
+                  position: vec3.clone(calibrationRef.current.position),
+                  quaternion: quat.clone(calibrationRef.current.quaternion)
+                } : {
+                  position: vec3.clone(rawPos),
+                  quaternion: quat.create()
+                }
+                transitionProgressRef.current = 0
+                stillTimeRef.current = 0
+              }
+            } else {
+              stillTimeRef.current = 0
+            }
+          }
+        }
+        lastHeadPoseRef.current = { position: vec3.clone(rawPos), quaternion: quat.clone(rawQuat) }
+      }
+
       let outPos = rawPos
       let outQuat = rawQuat
       if (calibrationRef.current) {
@@ -380,7 +486,9 @@ function App() {
         const mouthStretchRight = getBlendshapeValue('mouthStretchRight')
         const mouthLowerDown = getBlendshapeValue('mouthLowerDownLeft') + getBlendshapeValue('mouthLowerDownRight')
         const mouthUpperUp = getBlendshapeValue('mouthUpperUpLeft') + getBlendshapeValue('mouthUpperUpRight')
-
+        // ここはまだ実装途中 by tatsuさん なので、今は一旦コメントアウトしてるだけなので指示があるまでは勝手に消さないで
+        // const mouthDimpleLeft = getBlendshapeValue('mouthDimpleLeft')
+        // const mouthDimpleRight = getBlendshapeValue('mouthDimpleRight')
 
         // Calculate aiueo from blendshapes
         // mouthOpenness gate: Use normalized mouth height (actual lip separation)
@@ -586,6 +694,12 @@ function App() {
       } catch (e) {
         console.error('Failed to load head calibration:', e)
       }
+    } else {
+      // Use default calibration if none saved
+      calibrationRef.current = {
+        position: vec3.fromValues(DEFAULT_HEAD_CALIBRATION.position[0], DEFAULT_HEAD_CALIBRATION.position[1], DEFAULT_HEAD_CALIBRATION.position[2]),
+        quaternion: quat.fromValues(DEFAULT_HEAD_CALIBRATION.quaternion[0], DEFAULT_HEAD_CALIBRATION.quaternion[1], DEFAULT_HEAD_CALIBRATION.quaternion[2], DEFAULT_HEAD_CALIBRATION.quaternion[3])
+      }
     }
 
     const savedHandCalib = localStorage.getItem('handCalibration')
@@ -595,6 +709,13 @@ function App() {
         handCalibrationRef.current = parsed
       } catch (e) {
         console.error('Failed to load hand calibration:', e)
+      }
+    } else {
+      // Use default calibration if none saved
+      handCalibrationRef.current = {
+        leftHandSize: DEFAULT_HAND_CALIBRATION.leftHandSize,
+        rightHandSize: DEFAULT_HAND_CALIBRATION.rightHandSize,
+        referenceDepth: DEFAULT_HAND_CALIBRATION.referenceDepth
       }
     }
   }, [])
@@ -718,12 +839,12 @@ function App() {
         onHandCalibrate={handleHandCalibrate}
         onResetCalibration={handleResetCalibration}
         handCalibCountdown={handCalibCountdown}
-        onSetupFaceTrack={handleSetupFaceTrack}
-        setupStatus={setupStatus}
         mouthDebug={mouthDebug}
         blendshapeDebug={blendshapeDebug}
         expressionMode={expressionMode}
         onSetMode={handleSetMode}
+        autoCalibrate={autoCalibrate}
+        onAutoCalibrateChange={setAutoCalibrate}
       />
     </div>
   )

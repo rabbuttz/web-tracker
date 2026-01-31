@@ -453,15 +453,6 @@ async function setupMouthShapeKeys(client, avatarSlot, faceTrackSlot) {
     }
     console.log(`[Mouth Setup] Phase 4 results: ${JSON.stringify(mouthUpdateResults)}`);
 
-    console.log('[Mouth Setup] Phase 5: Finalizing DirectVisemeDriver...');
-    try {
-        await client.updateComponent(visemeComponent.id, {
-            Enabled: { $type: 'value', value: true }
-        });
-    } catch (e) {
-        console.warn('[Mouth Setup] Could not explicitly enable DVD:', e.message);
-    }
-
     const mouthSuccessCount = mouthUpdateResults.filter(r => r.success).length;
     const visemeSuccessCount = visemeUpdateResults.filter(r => r.success).length;
 
