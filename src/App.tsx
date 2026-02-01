@@ -3,7 +3,7 @@ import Webcam from 'react-webcam';
 import { type FaceLandmarkerResult, type HandLandmarkerResult } from '@mediapipe/tasks-vision';
 import { quat, vec3, mat3 } from 'gl-matrix';
 import { drawCanvas } from './utils/drawCanvas';
-import { WIDTH, HEIGHT, MIRROR_X, FACE_LM, HAND_LM } from './constants';
+import { WIDTH, HEIGHT, MIRROR_X, FACE_LM, HAND_LM, ARKIT_BLENDSHAPES } from './constants';
 import { poseFromHandLandmarks, poseFromFaceLandmarks } from './utils/trackingUtils';
 import { ControlPanel } from './components/ControlPanel';
 import { useMediaPipe } from './hooks/useMediaPipe';
@@ -128,9 +128,24 @@ function App() {
   const handleSetupFaceTrack = useCallback(async (username: string, port: number) => {
     setSetupStatus('Setting up...');
     try {
-      const response = await fetch(`http://localhost:3000/setup-facetrack?username=${encodeURIComponent(username)}&port=${port}`);
+      const response = await fetch(`http://localhost:3001/setup-facetrack?username=${encodeURIComponent(username)}&port=${port}`);
       const text = await response.text();
       setSetupStatus(text);
+    } catch (error) {
+      setSetupStatus(`Error: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }, [])
+
+  const handleSetupArkit = useCallback(async (username: string, port: number) => {
+    setSetupStatus('Setting up ARKit...');
+    try {
+      const response = await fetch(`http://localhost:3001/setup-arkit?username=${encodeURIComponent(username)}&port=${port}`);
+      const data = await response.json();
+      if (data.success) {
+        setSetupStatus(`Success: Created ${data.createdCount}, Updated ${data.updatedCount}`);
+      } else {
+        setSetupStatus(`Error: ${data.error || 'Failed'}`);
+      }
     } catch (error) {
       setSetupStatus(`Error: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -354,81 +369,19 @@ function App() {
       }
 
       if (expressionModeRef.current === 'blendshape') {
-        // Perfect Sync Mode: Calculate aiueo from blendshapes and send to legacy paths
-        const jawOpen = getBlendshapeValue('jawOpen')
-        const mouthPucker = getBlendshapeValue('mouthPucker')
-        const mouthFunnel = getBlendshapeValue('mouthFunnel')
-        const mouthSmileLeft = getBlendshapeValue('mouthSmileLeft')
-        const mouthSmileRight = getBlendshapeValue('mouthSmileRight')
-        const mouthStretchLeft = getBlendshapeValue('mouthStretchLeft')
-        const mouthStretchRight = getBlendshapeValue('mouthStretchRight')
-        const mouthLowerDown = getBlendshapeValue('mouthLowerDownLeft') + getBlendshapeValue('mouthLowerDownRight')
-        const mouthUpperUp = getBlendshapeValue('mouthUpperUpLeft') + getBlendshapeValue('mouthUpperUpRight')
-        const mouthDimpleLeft = getBlendshapeValue('mouthDimpleLeft')
-        const mouthDimpleRight = getBlendshapeValue('mouthDimpleRight')
+        // Perfect Sync Mode: Send all 52 ARKit blendshapes
+        // Using /avatar/parameters/FT/v2/ prefix
+        ARKIT_BLENDSHAPES.forEach(shapeName => {
+          const value = getBlendshapeValue(shapeName);
+          sendParam(`/avatar/parameters/FT/v2/${shapeName}`, [value]);
+        });
 
-        // Calculate aiueo from blendshapes
-        // mouthOpenness gate: Use normalized mouth height (actual lip separation)
-        const mouthOpenGate = Math.min(1.0, nHeight / 0.04)
-
-        // aa (あ): primarily jaw open
-        let v_aa = Math.max(0, jawOpen * 1.5 - 0.1) * mouthOpenGate
-
-        // ih (い): wide smile/stretch
-        const smileAmount = (mouthSmileLeft + mouthSmileRight) * 0.5 + (mouthStretchLeft + mouthStretchRight) * 0.5
-        let v_ih = Math.max(0, smileAmount * 1.3 - 0.1) * mouthOpenGate
-
-        // ou (う): pucker/funnel
-        const puckerAmount = mouthPucker * 0.7 + mouthFunnel * 0.3
-        let v_ou = Math.max(0, puckerAmount * 1.0 - 0.3) * mouthOpenGate
-
-        // E (え): mouth open with horizontal stretch (between あ and い)
-        const lipOpen = (mouthLowerDown + mouthUpperUp) * 0.5
-        const eStretch = (mouthStretchLeft + mouthStretchRight) * 0.5
-        const eSmile = (mouthSmileLeft + mouthSmileRight) * 0.3
-        let v_E = Math.min(1.0, Math.max(0, lipOpen + eStretch + eSmile + jawOpen * 0.6) * 1.5) * mouthOpenGate
-
-        // oh (お): jaw open + moderate pucker
-        let v_oh = Math.max(0, (jawOpen * 0.8 + mouthPucker * 0.4) - 0.25) * 1.0 * mouthOpenGate
-
-        // Normalization: sum to 1.5 max
-        const rawValues = [v_aa, v_ih, v_ou, v_E, v_oh]
-        const sum = rawValues.reduce((a, b) => a + b, 0)
-
-        if (sum > 1.5) {
-          const scale = 1.5 / sum
-          v_aa *= scale
-          v_ih *= scale
-          v_ou *= scale
-          v_E *= scale
-          v_oh *= scale
-        } else if (sum <= 0.01) {
-          v_aa = 0.0001
-          v_ih = 0.0001
-          v_ou = 0.0001
-          v_E = 0.0001
-          v_oh = 0.0001
-        }
-
-        // Clamp and validate
-        v_aa = isNaN(v_aa) ? 0.0001 : Math.max(0.0001, Math.min(1.0, v_aa))
-        v_ih = isNaN(v_ih) ? 0.0001 : Math.max(0.0001, Math.min(1.0, v_ih))
-        v_ou = isNaN(v_ou) ? 0.0001 : Math.max(0.0001, Math.min(1.0, v_ou))
-        v_E = isNaN(v_E) ? 0.0001 : Math.max(0.0001, Math.min(1.0, v_E))
-        v_oh = isNaN(v_oh) ? 0.0001 : Math.max(0.0001, Math.min(1.0, v_oh))
-
-        // Send to legacy paths
-        sendParam('/avatar/parameters/aa', [v_aa])
-        sendParam('/avatar/parameters/ih', [v_ih])
-        sendParam('/avatar/parameters/ou', [v_ou])
-        sendParam('/avatar/parameters/E', [v_E])
-        sendParam('/avatar/parameters/oh', [v_oh])
-
-        // Also send additional blendshapes for expressions
-        sendParam('/avatar/parameters/Blendshapes/EyeBlinkLeft', [getBlendshapeValue('eyeBlinkLeft')])
-        sendParam('/avatar/parameters/Blendshapes/EyeBlinkRight', [getBlendshapeValue('eyeBlinkRight')])
-        sendParam('/avatar/parameters/Blendshapes/BrowInnerUp', [getBlendshapeValue('browInnerUp')])
-        sendParam('/avatar/parameters/Blendshapes/CheekPuff', [getBlendshapeValue('cheekPuff')])
+        // Suppress visemes in Perfect Sync mode to prevent interference
+        sendParam('/avatar/parameters/aa', [0.0001])
+        sendParam('/avatar/parameters/ih', [0.0001])
+        sendParam('/avatar/parameters/ou', [0.0001])
+        sendParam('/avatar/parameters/E', [0.0001])
+        sendParam('/avatar/parameters/oh', [0.0001])
 
         if (blendshapes) {
           // Update blendshape debug display - remember names that exceeded threshold
@@ -682,6 +635,7 @@ function App() {
         blendshapeDebug={blendshapeDebug}
         expressionMode={expressionMode}
         onSetMode={handleSetMode}
+        onSetupArkit={handleSetupArkit}
       />
     </div>
   )

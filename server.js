@@ -1,6 +1,7 @@
 import express from 'express';
 import WebSocket from 'ws';
 import { v4 as uuidv4 } from 'uuid';
+import { createArkitSetup } from './arkit-setup.js';
 
 const WEB_PORT = 3000;
 const DEFAULT_RESONITE_PORT = 10534;
@@ -116,13 +117,37 @@ class ResoniteLinkClient {
         return this.sendMessage({
             $type: 'updateComponent',
             messageId: uuidv4(),
-            data: { id: componentId, members }
+            data: {
+                id: componentId,
+                members
+            }
         });
     }
 
     async getComponent(componentId) {
         return this.sendMessage({
             $type: 'getComponent',
+            messageId: uuidv4(),
+            componentId
+        });
+    }
+
+    async addComponent(slotId, componentType, members = {}, componentId = null) {
+        return this.sendMessage({
+            $type: 'addComponent',
+            messageId: uuidv4(),
+            containerSlotId: slotId,
+            data: {
+                componentType,
+                members,
+                id: componentId
+            }
+        });
+    }
+
+    async removeComponent(componentId) {
+        return this.sendMessage({
+            $type: 'removeComponent',
             messageId: uuidv4(),
             componentId
         });
@@ -136,6 +161,21 @@ let isSettingUp = false;
 const app = express();
 app.use(express.json());
 
+const arkitSetup = createArkitSetup({
+    ResoniteLinkClient,
+    defaultResonitePort: DEFAULT_RESONITE_PORT,
+    getSlotName,
+    findChildByName,
+    getResoniteClient: () => resoniteClient,
+    setResoniteClient: (client) => { resoniteClient = client; },
+    getCurrentResonitePort: () => currentResonitePort,
+    setCurrentResonitePort: (port) => { currentResonitePort = port; },
+    getIsSettingUp: () => isSettingUp,
+    setIsSettingUp: (value) => { isSettingUp = value; }
+});
+
+arkitSetup.registerArkitRoutes(app);
+
 // Helper functions (extracted from ResoniteLink logic)
 function getSlotName(slot) {
     if (!slot) return '';
@@ -143,7 +183,7 @@ function getSlotName(slot) {
 }
 
 function findChildByName(slot, name) {
-    if (!slot.children) return null;
+    if (!slot || !slot.children) return null;
     return slot.children.find(child => getSlotName(child) === name);
 }
 
@@ -260,10 +300,113 @@ async function setupMouthShapeKeys(client, avatarSlot, faceTrackSlot) {
 
         if (smr) {
             console.log(`[Mouth Setup] Found SkinnedMeshRenderer in slot: ${getSlotName(childSlot)}`);
+
+            // === DETAILED SLOT COMPONENT ANALYSIS ===
+            console.log(`[Slot Analysis] ========== DETAILED SLOT COMPONENT ANALYSIS ==========`);
+            console.log(`[Slot Analysis] Slot name: ${getSlotName(childSlot)} (ID: ${childSlot.id})`);
+            console.log(`[Slot Analysis] Total components in slot: ${slotDetail.data.components.length}`);
+
+            // 1. List all component types
+            console.log(`[Slot Analysis] --- All Component Types ---`);
+            slotDetail.data.components.forEach((comp, index) => {
+                const type = comp.type || comp.componentType || 'unknown';
+                console.log(`[Slot Analysis] [${index}] ${type} (ID: ${comp.id})`);
+            });
+
+            // 2. Check for specific mesh-related components
+            const meshRelatedTypes = ['MeshRenderer', 'StaticMeshRenderer', 'MeshFilter', 'Mesh', 'MeshCollider'];
+            console.log(`[Slot Analysis] --- Mesh-Related Components Check ---`);
+            const foundMeshComps = slotDetail.data.components.filter(c => {
+                const type = (c.type || c.componentType || '').toLowerCase();
+                return meshRelatedTypes.some(m => type.includes(m.toLowerCase()));
+            });
+            if (foundMeshComps.length > 0) {
+                foundMeshComps.forEach(c => {
+                    const type = c.type || c.componentType || 'unknown';
+                    console.log(`[Slot Analysis]   FOUND: ${type} (ID: ${c.id})`);
+                });
+            } else {
+                console.log(`[Slot Analysis]   No MeshRenderer, StaticMeshRenderer, or MeshFilter found`);
+            }
+
+            // 3. Check for BlendShape-related members in all components
+            console.log(`[Slot Analysis] --- BlendShape/Shape Names Search ---`);
+            for (const comp of slotDetail.data.components) {
+                const type = comp.type || comp.componentType || 'unknown';
+                const members = comp.members || {};
+                const memberKeys = Object.keys(members);
+
+                // Check for blendshape/shape related keys
+                const shapeRelatedKeys = memberKeys.filter(k =>
+                    k.toLowerCase().includes('blendshape') ||
+                    k.toLowerCase().includes('shapename') ||
+                    k.toLowerCase().includes('shapenames') ||
+                    k.toLowerCase().includes('blendshapenames')
+                );
+
+                if (shapeRelatedKeys.length > 0) {
+                    console.log(`[Slot Analysis]   Component: ${type} (ID: ${comp.id})`);
+                    shapeRelatedKeys.forEach(key => {
+                        console.log(`[Slot Analysis]     - ${key}: ${JSON.stringify(members[key])}`);
+                    });
+                }
+            }
+            console.log(`[Slot Analysis] ========== END SLOT ANALYSIS ==========`);
+            // === END DETAILED SLOT COMPONENT ANALYSIS ===
+
             const smrDetail = await client.getComponent(smr.id);
             if (smrDetail.success) {
                 skinnedMeshRenderer = smrDetail.data;
                 console.log(`[Mouth Setup] SkinnedMeshRenderer members: ${Object.keys(smrDetail.data.members).filter(k => k.includes('BlendShape')).join(', ')}`);
+
+                // BlendShapeWeightsの詳細出力
+                console.log(`[BlendShapes] ========== BLEND SHAPE DETAILED INFO ==========`);
+                const members = smrDetail.data.members;
+
+                // BlendShape関連の全membersを表示
+                const blendShapeKeys = Object.keys(members).filter(k => k.toLowerCase().includes('blendshape'));
+                console.log(`[BlendShapes] Found ${blendShapeKeys.length} BlendShape-related members:`, blendShapeKeys);
+
+                // BlendShapeWeightsの詳細を表示
+                if (members.BlendShapeWeights) {
+                    console.log(`[BlendShapes] BlendShapeWeights structure:`, JSON.stringify(members.BlendShapeWeights, null, 2));
+                    if (members.BlendShapeWeights.value) {
+                        console.log(`[BlendShapes] BlendShapeWeights values (length=${members.BlendShapeWeights.value.length}):`, members.BlendShapeWeights.value);
+                    }
+                }
+
+                // その他のBlendShape関連メンバーも確認
+                for (const key of blendShapeKeys) {
+                    if (key !== 'BlendShapeWeights') {
+                        console.log(`[BlendShapes] ${key}:`, JSON.stringify(members[key], null, 2));
+                    }
+                }
+                console.log(`[BlendShapes] ========== END BLEND SHAPE INFO ==========`);
+
+                // === EXPERIMENT: SkinnedMeshRendererの全membersを探索 ===
+                console.log(`[BlendShapes] ========== EXPERIMENT: ALL MEMBERS ==========`);
+                console.log(`[BlendShapes] All SMR member keys (${Object.keys(members).length}):`, Object.keys(members).join(', '));
+
+                // 名前にShape, Mesh, Blend, Nameなどが含まれるmembersを探す
+                const nameRelatedKeys = Object.keys(members).filter(k =>
+                    k.toLowerCase().includes('name') ||
+                    k.toLowerCase().includes('shape') ||
+                    k.toLowerCase().includes('mesh') ||
+                    k.toLowerCase().includes('shared')
+                );
+                console.log(`[BlendShapes] Name/Shape/Mesh related keys:`, nameRelatedKeys);
+
+                // Mesh参照を探す
+                for (const key of Object.keys(members)) {
+                    if (key.toLowerCase().includes('mesh') || key.toLowerCase().includes('shared')) {
+                        console.log(`[BlendShapes] Mesh-related member '${key}':`, JSON.stringify(members[key], null, 2));
+                    }
+                }
+
+                // SMRの型情報を表示
+                console.log(`[BlendShapes] SMR component type: ${smrDetail.data.type || smr.componentType || 'unknown'}`);
+                console.log(`[BlendShapes] ========== END EXPERIMENT ==========`);
+
                 break;
             }
         }
@@ -478,6 +621,14 @@ app.get('/setup-facetrack', async (req, res) => {
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
     const username = req.query.username;
     const port = parseInt(req.query.port) || DEFAULT_RESONITE_PORT;
+    const arkitParam = req.query.arkit;
+    const runArkit = arkitParam === undefined
+        ? true
+        : !['0', 'false', 'no'].includes(String(arkitParam).toLowerCase());
+    const arkitLimit = req.query.arkitLimit ? parseInt(req.query.arkitLimit, 10) : undefined;
+    const arkitBatch = req.query.arkitBatch ? parseInt(req.query.arkitBatch, 10) : undefined;
+    const arkitDebugSelf = req.query.arkitDebugSelf === '1';
+    const arkitNoType = req.query.arkitNoType === '1';
 
     if (!username) {
         return res.status(400).send("Error: Username parameter required / エラー: usernameパラメータが必須です。");
@@ -703,7 +854,22 @@ app.get('/setup-facetrack', async (req, res) => {
         const mouthSetupResult = await setupMouthShapeKeys(resoniteClient, avatarSlot, faceTrackDetail.data);
         console.log(`[FaceTrack] Mouth setup complete: ${mouthSetupResult}`);
 
-        const successMessage = `Success: Setup complete for "${username}".${mouthSetupResult} / 成功: "${username}" のセットアップが完了しました。${mouthSetupResult}`;
+        let arkitSummary = '';
+        if (runArkit) {
+            console.log('[FaceTrack] Starting ARKit setup...');
+            const arkitResult = await arkitSetup.runArkitSetup({
+                username,
+                port,
+                limit: arkitLimit,
+                debugSelf: arkitDebugSelf,
+                noType: arkitNoType,
+                batch: arkitBatch
+            });
+            arkitSummary = ` ARKit: created ${arkitResult.createdCount}, updated ${arkitResult.updatedCount}, missing ${arkitResult.missingCount}.`;
+            console.log(`[FaceTrack] ARKit setup complete: ${arkitSummary.trim()}`);
+        }
+
+        const successMessage = `Success: Setup complete for "${username}".${mouthSetupResult}${arkitSummary} / 成功: "${username}" のセットアップが完了しました。${mouthSetupResult}${arkitSummary}`;
         console.log(`[FaceTrack] Sending success response...`);
         res.send(successMessage);
         console.log('[FaceTrack] Response sent!');
