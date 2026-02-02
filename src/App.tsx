@@ -3,7 +3,7 @@ import Webcam from 'react-webcam';
 import { type FaceLandmarkerResult, type HandLandmarkerResult } from '@mediapipe/tasks-vision';
 import { quat, vec3, mat3 } from 'gl-matrix';
 import { drawCanvas } from './utils/drawCanvas';
-import { WIDTH, HEIGHT, MIRROR_X, FACE_LM, HAND_LM, ARKIT_BLENDSHAPES } from './constants';
+import { WIDTH, HEIGHT, MIRROR_X, FACE_LM, HAND_LM, ARKIT_BLENDSHAPES, ARKIT_TO_UNIFIED_MAP } from './constants';
 import { poseFromHandLandmarks, poseFromFaceLandmarks } from './utils/trackingUtils';
 import { ControlPanel } from './components/ControlPanel';
 import { useMediaPipe } from './hooks/useMediaPipe';
@@ -369,11 +369,17 @@ function App() {
       }
 
       if (expressionModeRef.current === 'blendshape') {
-        // Perfect Sync Mode: Send all 52 ARKit blendshapes
+        // Perfect Sync Mode: Send all 52 ARKit blendshapes + corresponding Unified names
         // Using /avatar/parameters/FT/v2/ prefix
         ARKIT_BLENDSHAPES.forEach(shapeName => {
           const value = getBlendshapeValue(shapeName);
+          // ARKit名で送信
           sendParam(`/avatar/parameters/FT/v2/${shapeName}`, [value]);
+          // 対応するUnified名でも送信
+          const unifiedName = ARKIT_TO_UNIFIED_MAP[shapeName];
+          if (unifiedName) {
+            sendParam(`/avatar/parameters/FT/v2/${unifiedName}`, [value]);
+          }
         });
 
         // Suppress visemes in Perfect Sync mode to prevent interference

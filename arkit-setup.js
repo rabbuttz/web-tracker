@@ -53,6 +53,132 @@ const ARKIT_BLENDSHAPES = [
     'tongueOut'
 ];
 
+// VRCFT Unified Expressions - Base Shapes (ARKitに存在しないもののみ)
+const UNIFIED_BASE_SHAPES = [
+    // 眼球（ARKitと命名が同じものは除外）
+    'EyeClosedRight', 'EyeClosedLeft',  // ARKitでは eyeBlinkRight/Left
+    'EyeLookOutRight', 'EyeLookInRight', 'EyeLookUpRight', 'EyeLookDownRight',
+    'EyeLookOutLeft', 'EyeLookInLeft', 'EyeLookUpLeft', 'EyeLookDownLeft',
+    'EyeSquintRight', 'EyeSquintLeft', 'EyeWideRight', 'EyeWideLeft',
+    // 瞳孔
+    'EyeDilationRight', 'EyeDilationLeft', 'EyeConstrictRight', 'EyeConstrictLeft',
+    // 眉毛
+    'BrowPinchRight', 'BrowPinchLeft', 'BrowLowererRight', 'BrowLowererLeft',
+    'BrowInnerUpRight', 'BrowInnerUpLeft', 'BrowOuterUpRight', 'BrowOuterUpLeft',
+    // 鼻
+    'NoseSneerRight', 'NoseSneerLeft',
+    'NasalDilationRight', 'NasalDilationLeft', 'NasalConstrictRight', 'NasalConstrictLeft',
+    // 頬
+    'CheekSquintRight', 'CheekSquintLeft', 'CheekPuffRight', 'CheekPuffLeft',
+    'CheekSuckRight', 'CheekSuckLeft',
+    // 顎
+    'JawOpen', 'MouthClosed', 'JawRight', 'JawLeft', 'JawForward',
+    'JawBackward', 'JawClench', 'JawMandibleRaise',
+    // 唇
+    'LipSuckUpperRight', 'LipSuckUpperLeft', 'LipSuckLowerRight', 'LipSuckLowerLeft',
+    'LipSuckCornerRight', 'LipSuckCornerLeft',
+    'LipFunnelUpperRight', 'LipFunnelUpperLeft', 'LipFunnelLowerRight', 'LipFunnelLowerLeft',
+    'LipPuckerUpperRight', 'LipPuckerUpperLeft', 'LipPuckerLowerRight', 'LipPuckerLowerLeft',
+    // 口
+    'MouthUpperUpRight', 'MouthUpperUpLeft', 'MouthLowerDownRight', 'MouthLowerDownLeft',
+    'MouthUpperDeepenRight', 'MouthUpperDeepenLeft',
+    'MouthUpperRight', 'MouthUpperLeft', 'MouthLowerRight', 'MouthLowerLeft',
+    'MouthCornerPullRight', 'MouthCornerPullLeft', 'MouthCornerSlantRight', 'MouthCornerSlantLeft',
+    'MouthFrownRight', 'MouthFrownLeft', 'MouthStretchRight', 'MouthStretchLeft',
+    'MouthDimpleRight', 'MouthDimpleLeft', 'MouthRaiserUpper', 'MouthRaiserLower',
+    'MouthPressRight', 'MouthPressLeft', 'MouthTightenerRight', 'MouthTightenerLeft',
+    // 舌
+    'TongueOut', 'TongueUp', 'TongueDown', 'TongueRight', 'TongueLeft',
+    'TongueRoll', 'TongueBendDown', 'TongueCurlUp', 'TongueSquish',
+    'TongueFlat', 'TongueTwistRight', 'TongueTwistLeft',
+    // その他
+    'SoftPalateClose', 'ThroatSwallow', 'NeckFlexRight', 'NeckFlexLeft'
+];
+
+// VRCFT Unified Expressions - Blended Shapes (左右統合など)
+const UNIFIED_BLENDED_SHAPES = [
+    // 目
+    'EyeClosed', 'EyeWide', 'EyeSquint', 'EyeDilation', 'EyeConstrict',
+    // 眉毛
+    'BrowDownRight', 'BrowDownLeft', 'BrowDown', 'BrowInnerUp',
+    'BrowUpRight', 'BrowUpLeft', 'BrowUp',
+    // 鼻
+    'NoseSneer', 'NasalDilation', 'NasalConstrict',
+    // 頬
+    'CheekPuff', 'CheekSuck', 'CheekSquint',
+    // 唇
+    'LipSuckUpper', 'LipSuckLower', 'LipSuck',
+    'LipFunnelUpper', 'LipFunnelLower', 'LipFunnel',
+    'LipPuckerUpper', 'LipPuckerLower', 'LipPucker',
+    // 口
+    'MouthUpperUp', 'MouthLowerDown', 'MouthOpen',
+    'MouthRight', 'MouthLeft',
+    'MouthSmileRight', 'MouthSmileLeft', 'MouthSmile',
+    'MouthSadRight', 'MouthSadLeft', 'MouthSad',
+    'MouthStretch', 'MouthDimple', 'MouthTightener', 'MouthPress'
+];
+
+// 統合: 全Unified Blendshapes（ARKitにないもの）
+const UNIFIED_ONLY_BLENDSHAPES = [...UNIFIED_BASE_SHAPES, ...UNIFIED_BLENDED_SHAPES];
+
+// ARKit から Unified へのマッピング (https://docs.vrcft.io/docs/tutorial-avatars/tutorial-avatars-extras/compatibility/arkit)
+const ARKIT_TO_UNIFIED_MAP = {
+    'eyeLookUpRight': 'EyeLookUpRight',
+    'eyeLookDownRight': 'EyeLookDownRight',
+    'eyeLookInRight': 'EyeLookInRight',
+    'eyeLookOutRight': 'EyeLookOutRight',
+    'eyeLookUpLeft': 'EyeLookUpLeft',
+    'eyeLookDownLeft': 'EyeLookDownLeft',
+    'eyeLookInLeft': 'EyeLookInLeft',
+    'eyeLookOutLeft': 'EyeLookOutLeft',
+    'eyeBlinkRight': 'EyeClosedRight',
+    'eyeBlinkLeft': 'EyeClosedLeft',
+    'eyeSquintRight': 'EyeSquintRight',
+    'eyeSquintLeft': 'EyeSquintLeft',
+    'eyeWideRight': 'EyeWideRight',
+    'eyeWideLeft': 'EyeWideLeft',
+    'browDownRight': 'BrowDownRight',
+    'browDownLeft': 'BrowDownLeft',
+    'browInnerUp': 'BrowInnerUp',
+    'browOuterUpRight': 'BrowOuterUpRight',
+    'browOuterUpLeft': 'BrowOuterUpLeft',
+    'noseSneerRight': 'NoseSneerRight',
+    'noseSneerLeft': 'NoseSneerLeft',
+    'cheekSquintRight': 'CheekSquintRight',
+    'cheekSquintLeft': 'CheekSquintLeft',
+    'cheekPuff': 'CheekPuff',
+    'jawOpen': 'JawOpen',
+    'mouthClose': 'MouthClosed',
+    'jawRight': 'JawRight',
+    'jawLeft': 'JawLeft',
+    'jawForward': 'JawForward',
+    'mouthRollUpper': 'LipSuckUpper',
+    'mouthRollLower': 'LipSuckLower',
+    'mouthFunnel': 'LipFunnel',
+    'mouthPucker': 'LipPucker',
+    'mouthUpperUpRight': 'MouthUpperUpRight',
+    'mouthUpperUpLeft': 'MouthUpperUpLeft',
+    'mouthLowerDownRight': 'MouthLowerDownRight',
+    'mouthLowerDownLeft': 'MouthLowerDownLeft',
+    'mouthSmileRight': 'MouthSmileRight',
+    'mouthSmileLeft': 'MouthSmileLeft',
+    'mouthFrownRight': 'MouthFrownRight',
+    'mouthFrownLeft': 'MouthFrownLeft',
+    'mouthStretchRight': 'MouthStretchRight',
+    'mouthStretchLeft': 'MouthStretchLeft',
+    'mouthDimpleRight': 'MouthDimpleRight',
+    'mouthDimpleLeft': 'MouthDimpleLeft',
+    'mouthShrugUpper': 'MouthRaiserUpper',
+    'mouthShrugLower': 'MouthRaiserLower',
+    'mouthPressRight': 'MouthPressRight',
+    'mouthPressLeft': 'MouthPressLeft',
+    'tongueOut': 'TongueOut'
+};
+
+// 全ブレンドシェイプ名のリスト（OSCパス検出用）
+// 全ブレンドシェイプ名のリスト（OSCパス検出用、重複除去）
+const ALL_BLENDSHAPE_NAMES = [...new Set([...ARKIT_BLENDSHAPES, ...UNIFIED_ONLY_BLENDSHAPES, ...Object.values(ARKIT_TO_UNIFIED_MAP)])];
+
 const SMR_TYPE = '[FrooxEngine]FrooxEngine.SkinnedMeshRenderer';
 
 function buildOscPath(basePath, shapeName) {
@@ -68,9 +194,9 @@ function buildOscPath(basePath, shapeName) {
         return trimmed + shapeName;
     }
 
-    // Check if it ends with any of the known ARKit blendshape names (case-insensitive)
+    // Check if it ends with any of the known blendshape names (ARKit + Unified, case-insensitive)
     const lowerTrimmed = trimmed.toLowerCase();
-    for (const shape of ARKIT_BLENDSHAPES) {
+    for (const shape of ALL_BLENDSHAPE_NAMES) {
         const lowerShape = shape.toLowerCase();
 
         // Match /shapeName or just shapeName
@@ -252,22 +378,28 @@ function findReferenceMemberKey(members, targetTypeIncludes = null) {
 
 function buildBlendShapeCandidates(shapeNames) {
     const candidates = [];
-    const aliasMap = {};
+    const seen = new Set();
 
     for (const name of shapeNames) {
-        const variants = new Set([name]);
+        // 大文字開始バリアントも追加
+        const variants = [name];
         if (name && name.length > 0) {
-            variants.add(name[0].toUpperCase() + name.slice(1));
+            const capitalized = name[0].toUpperCase() + name.slice(1);
+            if (capitalized !== name) {
+                variants.push(capitalized);
+            }
         }
+
         for (const variant of variants) {
-            if (!aliasMap[variant]) {
-                aliasMap[variant] = name;
+            if (!seen.has(variant)) {
+                seen.add(variant);
                 candidates.push(variant);
             }
         }
     }
 
-    return { candidates, aliasMap };
+    // aliasMapは不要（見つかった名前をそのまま使う）
+    return { candidates, aliasMap: null };
 }
 
 async function resolveBlendShapeFields(client, faceSlotId, smrId, shapeNames, nameAliasMap = null, driverId = null) {
@@ -418,11 +550,11 @@ async function resolveBlendShapeFields(client, faceSlotId, smrId, shapeNames, na
                 console.warn(`[ARKit Setup] _drive not linked for "${resolvedName}" - BlendShapeName may not match SMR`);
             }
 
-            const sourceName = resolvedName || shapeNames[index] || null;
-            const targetName = nameAliasMap?.[sourceName] || sourceName;
+            // 見つかった名前をそのまま使う（aliasMapによる変換はしない）
+            const foundName = resolvedName || shapeNames[index] || null;
 
-            if (targetName && fieldId) {
-                localResolved[targetName] = fieldId;
+            if (foundName && fieldId) {
+                localResolved[foundName] = fieldId;
             }
         });
 
@@ -431,10 +563,12 @@ async function resolveBlendShapeFields(client, faceSlotId, smrId, shapeNames, na
 
     let lastResolved = {};
     let namesPopulated = false;
+    let lastResolvedCount = 0;
+    let noChangeCount = 0;
 
     // Extended polling to ensure DynamicBlendShapeDriver has time to link names
-    for (let attempt = 0; attempt < 20; attempt++) {
-        await new Promise(resolve => setTimeout(resolve, 800));
+    for (let attempt = 0; attempt < 25; attempt++) {
+        await new Promise(resolve => setTimeout(resolve, 200));
         const driverDetail = await client.getComponent(finalActualDriverId);
         if (!driverDetail.success) continue;
 
@@ -457,11 +591,23 @@ async function resolveBlendShapeFields(client, faceSlotId, smrId, shapeNames, na
 
             lastResolved = localResolved;
 
-            // Wait until we have at least one resolved or all attempts exhausted
-            if (resolvedCount > 0 && (resolvedCount === shapeNames.length || attempt > 15)) {
+            // 全て解決したら即終了
+            if (resolvedCount === shapeNames.length) {
                 console.log(`[ARKit Setup] _drive links established: ${resolvedCount}/${shapeNames.length}`);
                 break;
             }
+
+            // 変化がなければカウント、3回連続変化なしなら終了
+            if (resolvedCount === lastResolvedCount) {
+                noChangeCount++;
+                if (noChangeCount >= 3 && resolvedCount > 0) {
+                    console.log(`[ARKit Setup] Early exit (no changes): ${resolvedCount}/${shapeNames.length}`);
+                    break;
+                }
+            } else {
+                noChangeCount = 0;
+            }
+            lastResolvedCount = resolvedCount;
         }
     }
 
@@ -505,7 +651,7 @@ export function createArkitSetup({
     const runArkitSetup = async ({
         username,
         port = defaultResonitePort,
-        limit = ARKIT_BLENDSHAPES.length,
+        limit = ALL_BLENDSHAPE_NAMES.length,
         debugSelf = false,
         noType = false,
         batch = 8
@@ -514,8 +660,9 @@ export function createArkitSetup({
             throw new Error('Username parameter required');
         }
 
-        const shapeLimit = Math.max(1, Math.min(parseInt(limit, 10), ARKIT_BLENDSHAPES.length));
-        const shapeList = ARKIT_BLENDSHAPES.slice(0, shapeLimit);
+        // 全ブレンドシェイプ名（ARKit + Unified）を探索対象にする
+        const shapeLimit = Math.max(1, Math.min(parseInt(limit, 10), ALL_BLENDSHAPE_NAMES.length));
+        const shapeList = ALL_BLENDSHAPE_NAMES.slice(0, shapeLimit);
         const batchSize = Math.max(1, Math.min(parseInt(batch, 10), shapeList.length));
 
         console.log(`[ARKit Setup] Starting setup for user: ${username} (port: ${port})`);
@@ -667,15 +814,14 @@ export function createArkitSetup({
 
         const created = [];
         const updated = [];
-        const missing = [];
         const idPrefix = `ARKIT_${Date.now()}`;
 
-        for (const shapeName of shapeList) {
+        // 見つかったブレンドシェイプのみを処理（見つかった名前をそのまま使う）
+        const foundShapes = Object.keys(resolvedMap);
+        console.log(`[ARKit Setup] Found ${foundShapes.length} blendshapes in SMR`);
+
+        for (const shapeName of foundShapes) {
             const fieldId = resolvedMap[shapeName];
-            if (!fieldId) {
-                missing.push(shapeName);
-                continue;
-            }
 
             const oscPath = buildOscPath(basePath, shapeName);
             const existingOsc = oscByPath.get(oscPath) || null;
@@ -722,7 +868,6 @@ export function createArkitSetup({
                 smoothDetail = await client.getComponent(smoothComponentId);
                 if (!smoothDetail.success) {
                     console.warn(`[ARKit Setup] Failed to get SmoothValue details for ${shapeName} (${smoothComponentId})`);
-                    missing.push(shapeName);
                     continue;
                 }
             }
@@ -737,7 +882,6 @@ export function createArkitSetup({
             const driveInfo = resolveSmoothDriveMember(smoothMembers);
             if (!driveInfo) {
                 console.warn(`[ARKit Setup] SmoothValue drive member not found for ${shapeName} (${smoothComponentId}). Members: ${formatMemberSummary(smoothMembers)}`);
-                missing.push(shapeName);
                 continue;
             }
             smoothDriveKey = driveInfo.key;
@@ -746,7 +890,6 @@ export function createArkitSetup({
 
             if (!smoothTargetValueId) {
                 console.warn(`[ARKit Setup] SmoothValue target field missing for ${shapeName} (${smoothComponentId}). Members: ${formatMemberSummary(smoothMembers)}`);
-                missing.push(shapeName);
                 continue;
             }
 
@@ -869,10 +1012,9 @@ export function createArkitSetup({
             success: true,
             createdCount: created.length,
             updatedCount: updated.length,
-            missingCount: missing.length,
+            foundCount: foundShapes.length,
             created,
-            updated,
-            missing
+            updated
         };
     };
 
