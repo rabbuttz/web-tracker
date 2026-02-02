@@ -3,7 +3,7 @@ import WebSocket from 'ws';
 import { v4 as uuidv4 } from 'uuid';
 import { createArkitSetup } from './arkit-setup.js';
 
-const WEB_PORT = 3001;
+const WEB_PORT = 3000;
 const DEFAULT_RESONITE_PORT = 10534;
 
 // ============================================

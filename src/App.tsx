@@ -144,7 +144,7 @@ function App() {
   const handleSetupFaceTrack = useCallback(async (username: string, port: number) => {
     setSetupStatus('Setting up...');
     try {
-      const response = await fetch(`http://localhost:3001/setup-facetrack?username=${encodeURIComponent(username)}&port=${port}`);
+      const response = await fetch(`http://localhost:3000/setup-facetrack?username=${encodeURIComponent(username)}&port=${port}`);
       const text = await response.text();
       setSetupStatus(text);
     } catch (error) {
@@ -155,7 +155,7 @@ function App() {
   const handleSetupArkit = useCallback(async (username: string, port: number) => {
     setSetupStatus('Setting up ARKit...');
     try {
-      const response = await fetch(`http://localhost:3001/setup-arkit?username=${encodeURIComponent(username)}&port=${port}`);
+      const response = await fetch(`http://localhost:3000/setup-arkit?username=${encodeURIComponent(username)}&port=${port}`);
       const data = await response.json();
       if (data.success) {
         setSetupStatus(`Success: Created ${data.createdCount}, Updated ${data.updatedCount}`);
