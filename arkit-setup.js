@@ -654,7 +654,7 @@ export function createArkitSetup({
         limit = ALL_BLENDSHAPE_NAMES.length,
         debugSelf = false,
         noType = false,
-        batch = 8
+        batch = 999
     }) => {
         if (!username) {
             throw new Error('Username parameter required');
@@ -758,6 +758,50 @@ export function createArkitSetup({
         if (!avatarResponse.success) throw new Error('Failed to get avatar slot');
 
         const avatarSlot = avatarResponse.data;
+
+        // AvatarExpressionDriverを探して削除
+        const findAndRemoveAvatarExpressionDriver = async (slot) => {
+            if (!slot) return 0;
+            let removedCount = 0;
+
+            // このスロットのコンポーネントをチェック
+            if (slot.components) {
+                for (const component of slot.components) {
+                    const type = component.type || component.componentType || '';
+                    if (type.includes('AvatarExpressionDriver')) {
+                        console.log(`[ARKit Setup] Found AvatarExpressionDriver at ${getSlotName(slot)} (${component.id}), removing...`);
+                        try {
+                            await client.removeComponent(component.id);
+                            console.log(`[ARKit Setup] Removed AvatarExpressionDriver: ${component.id}`);
+                            removedCount++;
+                        } catch (err) {
+                            console.warn(`[ARKit Setup] Failed to remove AvatarExpressionDriver ${component.id}: ${err.message}`);
+                        }
+                    }
+                }
+            }
+
+            // 子スロットを再帰的にチェック
+            if (slot.children) {
+                for (const child of slot.children) {
+                    removedCount += await findAndRemoveAvatarExpressionDriver(child);
+                }
+            }
+
+            return removedCount;
+        };
+
+        // アバター全体を深く取得してAvatarExpressionDriverを探す
+        const avatarDeepResponse = await client.getSlot(avatarSlot.id, 10, true);
+        if (avatarDeepResponse.success) {
+            const removedCount = await findAndRemoveAvatarExpressionDriver(avatarDeepResponse.data);
+            if (removedCount > 0) {
+                console.log(`[ARKit Setup] Removed ${removedCount} AvatarExpressionDriver(s)`);
+            } else {
+                console.log(`[ARKit Setup] No AvatarExpressionDriver found`);
+            }
+        }
+
         const smrPick = await pickSkinnedMeshRenderer(client, avatarSlot);
         if (!smrPick) throw new Error('SkinnedMeshRenderer not found in avatar');
         const smr = smrPick.component;
@@ -1214,7 +1258,7 @@ export function createArkitSetup({
         const limit = parseInt(req.query.limit || ARKIT_BLENDSHAPES.length, 10);
         const debugSelf = req.query.debugSelf === '1';
         const noType = req.query.noType === '1';
-        const batch = parseInt(req.query.batch || 8, 10);
+        const batch = parseInt(req.query.batch || 999, 10);
 
         if (!username) {
             return res.status(400).send('Error: Username parameter required / エラー: usernameパラメータが必須です。');
