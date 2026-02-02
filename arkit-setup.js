@@ -270,7 +270,7 @@ function buildBlendShapeCandidates(shapeNames) {
     return { candidates, aliasMap };
 }
 
-async function resolveBlendShapeFields(client, driverSlotId, smrId, shapeNames, nameAliasMap = null, driverId = null) {
+async function resolveBlendShapeFields(client, faceSlotId, smrId, shapeNames, nameAliasMap = null, driverId = null) {
     const resolved = {};
     let finalDriverId = driverId || `BlendShapeFinder_${Date.now()}`;
     const elements = shapeNames.map(name => ({
@@ -281,58 +281,115 @@ async function resolveBlendShapeFields(client, driverSlotId, smrId, shapeNames, 
         }
     }));
 
-    let hasDriver = false;
-    if (driverId) {
-        const existing = await client.getComponent(driverId);
-        if (existing.success) {
-            await client.removeComponent(driverId);
-            await new Promise(resolve => setTimeout(resolve, 300));
-            hasDriver = false;
-        }
-    }
+    let finalActualDriverId = finalDriverId;
+    const addResult = await client.addComponent(
+        faceSlotId,
+        '[FrooxEngine]FrooxEngine.DynamicBlendShapeDriver',
+        {
+            Renderer: { $type: 'reference', targetId: smrId, targetType: SMR_TYPE },
+            BlendShapes: { $type: 'list', elements: elements }
+        },
+        finalDriverId
+    );
 
-    let added = false;
-    if (!hasDriver) {
-        const addResult = await client.addComponent(
-            driverSlotId,
-            '[FrooxEngine]FrooxEngine.DynamicBlendShapeDriver',
-            {
-                Renderer: { $type: 'reference', targetId: smrId, targetType: SMR_TYPE },
-                BlendShapes: { $type: 'list', elements }
-            },
-            finalDriverId
-        );
-        if (!addResult.success) {
-            if (addResult.errorInfo && addResult.errorInfo.includes('ID')) {
-                finalDriverId = `${finalDriverId}_${Date.now()}`;
-                const retry = await client.addComponent(
-                    driverSlotId,
-                    '[FrooxEngine]FrooxEngine.DynamicBlendShapeDriver',
-                    {
-                        Renderer: { $type: 'reference', targetId: smrId, targetType: SMR_TYPE },
-                        BlendShapes: { $type: 'list', elements }
-                    },
-                    finalDriverId
-                );
-                if (!retry.success) {
-                    throw new Error(`Failed to add DynamicBlendShapeDriver: ${retry.errorInfo || 'unknown error'}`);
-                }
-                added = true;
-            } else {
-                throw new Error(`Failed to add DynamicBlendShapeDriver: ${addResult.errorInfo || 'unknown error'}`);
+    if (!addResult.success) {
+        if (addResult.errorInfo && addResult.errorInfo.includes('ID')) {
+            finalActualDriverId = `${finalDriverId}_${Date.now()}`;
+            const retry = await client.addComponent(
+                faceSlotId,
+                '[FrooxEngine]FrooxEngine.DynamicBlendShapeDriver',
+                {
+                    Renderer: { $type: 'reference', targetId: smrId, targetType: SMR_TYPE },
+                    BlendShapes: { $type: 'list', elements: elements }
+                },
+                finalActualDriverId
+            );
+            if (!retry.success) {
+                throw new Error(`Failed to add DynamicBlendShapeDriver: ${retry.errorInfo || 'unknown error'}`);
             }
         } else {
-            added = true;
+            // If it's another error, try updating the existing one instead
+            const updateResult = await client.updateComponent(finalActualDriverId, {
+                Renderer: { $type: 'reference', targetId: smrId, targetType: SMR_TYPE },
+                BlendShapes: { $type: 'list', elements: elements }
+            });
+            if (!updateResult.success) {
+                throw new Error(`Failed to update DynamicBlendShapeDriver: ${updateResult.errorInfo || 'unknown error'}`);
+            }
         }
     }
 
-    if (!added) {
-        const updateResult = await client.updateComponent(finalDriverId, {
-            Renderer: { $type: 'reference', targetId: smrId, targetType: SMR_TYPE },
-            BlendShapes: { $type: 'list', elements }
+    // Wait for component to be created, then explicitly update BlendShapes to ensure names are set
+    await new Promise(resolve => setTimeout(resolve, 500));
+
+    // Fetch the created component to get element IDs
+    const initialDetail = await client.getComponent(finalActualDriverId);
+    if (initialDetail.success) {
+        const existingElements = initialDetail.data.members?.BlendShapes?.elements || [];
+
+        // Build update payload with existing element IDs to preserve structure
+        const updateElements = shapeNames.map((name, index) => {
+            const existingElement = existingElements[index];
+            const existingMembers = existingElement?.members || {};
+            return {
+                $type: 'syncObject',
+                ...(existingElement?.id ? { id: existingElement.id } : {}),
+                members: {
+                    BlendShapeName: {
+                        $type: 'string',
+                        value: name,
+                        ...(existingMembers.BlendShapeName?.id ? { id: existingMembers.BlendShapeName.id } : {})
+                    },
+                    Value: {
+                        $type: 'float',
+                        value: 0.0,
+                        ...(existingMembers.Value?.id ? { id: existingMembers.Value.id } : {})
+                    }
+                }
+            };
         });
-        if (!updateResult.success) {
-            throw new Error(`Failed to update DynamicBlendShapeDriver: ${updateResult.errorInfo || 'unknown error'}`);
+
+        // Update BlendShapes with names
+        const nameUpdateResult = await client.updateComponent(finalActualDriverId, {
+            BlendShapes: {
+                $type: 'list',
+                elements: updateElements,
+                ...(initialDetail.data.members?.BlendShapes?.id ? { id: initialDetail.data.members.BlendShapes.id } : {})
+            }
+        });
+
+        if (!nameUpdateResult.success) {
+            console.warn(`[ARKit Setup] BlendShapes update warning: ${nameUpdateResult.errorInfo || 'unknown'}`);
+        }
+
+        // CRITICAL: Reset Renderer to trigger _drive linking
+        // Setting Renderer to null then back to SMR causes DynamicBlendShapeDriver to re-resolve targets
+        const rendererId = initialDetail.data.members?.Renderer?.id;
+        if (rendererId) {
+            await new Promise(resolve => setTimeout(resolve, 300));
+
+            // Set Renderer to null
+            await client.updateComponent(finalActualDriverId, {
+                Renderer: {
+                    $type: 'reference',
+                    targetId: null,
+                    id: rendererId
+                }
+            });
+
+            await new Promise(resolve => setTimeout(resolve, 300));
+
+            // Set Renderer back to SMR to trigger target resolution
+            await client.updateComponent(finalActualDriverId, {
+                Renderer: {
+                    $type: 'reference',
+                    targetId: smrId,
+                    targetType: SMR_TYPE,
+                    id: rendererId
+                }
+            });
+
+            console.log(`[ARKit Setup] Renderer reset to trigger _drive linking`);
         }
     }
 
@@ -345,40 +402,75 @@ async function resolveBlendShapeFields(client, driverSlotId, smrId, shapeNames, 
             const members = element?.members || element?.Members || {};
             const nameMember = members.BlendShapeName || null;
             const resolvedName = nameMember?.value || nameMember?.Value || null;
-            const valueMember = members.Value || members.value || null;
-            const valueFieldId = valueMember?.id || null;
+
+            // Get the _drive reference which points to the actual SMR blendshape field
+            // This member is managed by DynamicBlendShapeDriver once it matches the name
+            const driveMember = members._drive || members.Drive || null;
+            const driveTargetId = (driveMember?.$type === 'reference' || driveMember?.targetId)
+                ? (driveMember.targetId || driveMember.TargetID)
+                : null;
+
+            // IMPORTANT: Only use _drive.targetId (SMR field), never fallback to Value.id (DBD field)
+            // If _drive is null, it means BlendShapeName wasn't matched yet
+            const fieldId = driveTargetId;
+
+            if (!fieldId && resolvedName) {
+                console.warn(`[ARKit Setup] _drive not linked for "${resolvedName}" - BlendShapeName may not match SMR`);
+            }
+
             const sourceName = resolvedName || shapeNames[index] || null;
             const targetName = nameAliasMap?.[sourceName] || sourceName;
-            if (targetName && valueFieldId) {
-                localResolved[targetName] = valueFieldId;
+
+            if (targetName && fieldId) {
+                localResolved[targetName] = fieldId;
             }
         });
 
         return { localResolved, elementsOut };
     };
 
-    let lastCount = -1;
     let lastResolved = {};
-    for (let attempt = 0; attempt < 10; attempt++) {
+    let namesPopulated = false;
+
+    // Extended polling to ensure DynamicBlendShapeDriver has time to link names
+    for (let attempt = 0; attempt < 20; attempt++) {
         await new Promise(resolve => setTimeout(resolve, 800));
-        const driverDetail = await client.getComponent(finalDriverId);
-        if (!driverDetail.success) {
-            throw new Error('Failed to get DynamicBlendShapeDriver details');
+        const driverDetail = await client.getComponent(finalActualDriverId);
+        if (!driverDetail.success) continue;
+
+        // First check if BlendShapeNames are populated
+        const elementsCheck = driverDetail.data.members?.BlendShapes?.elements || [];
+        const populatedNames = elementsCheck.filter(el => {
+            const name = el?.members?.BlendShapeName?.value || el?.members?.BlendShapeName?.Value;
+            return name && name !== null;
+        }).length;
+
+        if (!namesPopulated && populatedNames > 0) {
+            namesPopulated = true;
+            console.log(`[ARKit Setup] BlendShapeNames populated: ${populatedNames}/${shapeNames.length}`);
         }
 
-        const { localResolved } = parseDriver(driverDetail);
-        const resolvedCount = Object.keys(localResolved).length;
+        // Only check _drive links after names are populated
+        if (namesPopulated) {
+            const { localResolved } = parseDriver(driverDetail);
+            const resolvedCount = Object.keys(localResolved).length;
 
-        lastResolved = localResolved;
-        if (resolvedCount === lastCount) {
-            break;
+            lastResolved = localResolved;
+
+            // Wait until we have at least one resolved or all attempts exhausted
+            if (resolvedCount > 0 && (resolvedCount === shapeNames.length || attempt > 15)) {
+                console.log(`[ARKit Setup] _drive links established: ${resolvedCount}/${shapeNames.length}`);
+                break;
+            }
         }
-        lastCount = resolvedCount;
+    }
+
+    if (Object.keys(lastResolved).length === 0) {
+        console.warn(`[ARKit Setup] Warning: No blendshapes resolved. BlendShapeNames may not match SMR blendshape names.`);
     }
 
     console.log(`[ARKit Setup] Resolved blendshapes: ${Object.keys(lastResolved).length}/${shapeNames.length}`);
-
-    return { driverId: finalDriverId, resolved: lastResolved };
+    return { driverId: finalActualDriverId, resolved: lastResolved };
 }
 
 export function createArkitSetup({
@@ -525,6 +617,7 @@ export function createArkitSetup({
 
         const resolvedMap = {};
         const batches = [];
+        const createdDriverIds = [];
         for (let i = 0; i < shapeList.length; i += batchSize) {
             batches.push(shapeList.slice(i, i + batchSize));
         }
@@ -533,8 +626,19 @@ export function createArkitSetup({
             const batchSet = batches[i];
             const { candidates, aliasMap } = buildBlendShapeCandidates(batchSet);
             const driverId = `ARKIT_DBD_${Date.now()}_${i}`;
-            const resolveResult = await resolveBlendShapeFields(client, faceTrackSlot.id, smr.id, candidates, aliasMap, driverId);
+            const resolveResult = await resolveBlendShapeFields(client, faceSlot.id, smr.id, candidates, aliasMap, driverId);
             Object.assign(resolvedMap, resolveResult.resolved);
+            createdDriverIds.push(resolveResult.driverId);
+        }
+
+        // Cleanup: Remove temporary DynamicBlendShapeDrivers
+        for (const driverId of createdDriverIds) {
+            try {
+                await client.removeComponent(driverId);
+                console.log(`[ARKit Setup] Removed temporary driver: ${driverId}`);
+            } catch (err) {
+                console.warn(`[ARKit Setup] Failed to remove driver ${driverId}: ${err.message}`);
+            }
         }
 
         const faceComponents = faceDetail.data.components || [];
@@ -846,6 +950,11 @@ export function createArkitSetup({
             const faceTrackDetail = await client.getSlot(faceTrackSlot.id, 2, true);
             if (!faceTrackDetail.success) throw new Error('Failed to get FaceTrack slot details');
 
+            const faceSlot = findChildByName(faceTrackDetail.data, 'Face');
+            if (!faceSlot) {
+                return res.send('Error: Face slot not found under FaceTrack_ver. / エラー: FaceTrack_ver の下に Face スロットが見つかりませんでした。');
+            }
+
             const parentId = faceTrackDetail.data.parent?.targetId;
             if (!parentId) {
                 return res.send('Error: FaceTrack parent (avatar) not found. / エラー: FaceTrack の親（アバター）が見つかりませんでした。');
@@ -863,7 +972,7 @@ export function createArkitSetup({
 
             driverId = `BlendShapeFinder_${Date.now()}`;
             const addResult = await client.addComponent(
-                faceTrackSlot.id,
+                faceSlot.id,
                 '[FrooxEngine]FrooxEngine.DynamicBlendShapeDriver',
                 {
                     Renderer: {
@@ -891,6 +1000,7 @@ export function createArkitSetup({
                 return res.status(500).send(`Error: Failed to add DynamicBlendShapeDriver (${addResult.errorInfo || 'unknown error'}).`);
             }
 
+            // Always perform an explicit update to ensure BlendShapeName strings are set
             await client.updateComponent(driverId, {
                 Renderer: {
                     $type: 'reference',
