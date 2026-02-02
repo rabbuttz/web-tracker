@@ -729,6 +729,102 @@ export function createArkitSetup({
         const faceDetail = await client.getSlot(faceSlot.id, 2, true);
         if (!faceDetail.success) throw new Error('Failed to get Face slot details');
 
+        // Find Eye Manager and setup eye tracking
+        console.log('[ARKit Setup] Searching for Eye Manager...');
+        let eyeLinearDriverOpenStateIds = { Left: null, Right: null };
+        let eyeManagerSetupResult = '';
+        
+        const findAndSetupEyeManager = async (avatarSlotData) => {
+            const searchInSlot = (slot) => {
+                if (!slot) return null;
+                const slotName = getSlotName(slot);
+                if (slotName === 'Eye Manager' || slotName.includes('Eye Manager')) {
+                    return slot;
+                }
+                if (slot.children) {
+                    for (const child of slot.children) {
+                        const found = searchInSlot(child);
+                        if (found) return found;
+                    }
+                }
+                return null;
+            };
+            
+            const eyeManagerSlot = searchInSlot(avatarSlotData);
+            if (!eyeManagerSlot) {
+                console.log('[ARKit Setup] Eye Manager slot not found');
+                return null;
+            }
+            
+            const eyeManagerDetail = await client.getSlot(eyeManagerSlot.id, 0, true);
+            if (!eyeManagerDetail.success || !eyeManagerDetail.data.components) {
+                console.log('[ARKit Setup] Failed to get Eye Manager components');
+                return null;
+            }
+            
+            // Setup 1: Disable auto-blink in EyeManager
+            const eyeManagerComp = eyeManagerDetail.data.components.find(c => {
+                const type = c.type || c.componentType || '';
+                return type.includes('EyeManager');
+            });
+            
+            if (eyeManagerComp) {
+                try {
+                    const updateResult = await client.updateComponent(eyeManagerComp.id, {
+                        MinBlinkInterval: { $type: 'float', value: 'Infinity' },
+                        MaxBlinkInterval: { $type: 'float', value: 'Infinity' }
+                    });
+                    if (updateResult.success) {
+                        eyeManagerSetupResult = ' EyeManager: Auto-blink disabled.';
+                        console.log('[ARKit Setup] EyeManager: Min/MaxBlinkInterval set to Infinity');
+                    }
+                } catch (err) {
+                    console.error('[ARKit Setup] Error updating EyeManager:', err.message);
+                }
+            }
+            
+            // Setup 2: Find EyeLinearDriver for EyeClosed shapes
+            const eyeLinearDriver = eyeManagerDetail.data.components.find(c => {
+                const type = c.type || c.componentType || '';
+                return type.includes('EyeLinearDriver');
+            });
+            
+            if (!eyeLinearDriver) {
+                console.log('[ARKit Setup] EyeLinearDriver not found');
+                return null;
+            }
+            
+            // Get EyeLinearDriver details to find OpenState IDs
+            const driverDetail = await client.getComponent(eyeLinearDriver.id);
+            if (!driverDetail.success) return null;
+            
+            const eyes = driverDetail.data.members?.Eyes;
+            if (!eyes || !eyes.elements) return null;
+            
+            // Find first Left and Right eye OpenState IDs
+            let leftFound = false;
+            let rightFound = false;
+            
+            for (const eye of eyes.elements) {
+                const side = eye.members?.Side?.value;
+                const openStateId = eye.members?.OpenState?.id;
+                
+                if (side === 'Left' && openStateId && !leftFound) {
+                    eyeLinearDriverOpenStateIds.Left = openStateId;
+                    leftFound = true;
+                    console.log(`[ARKit Setup] Found Left eye OpenState: ${openStateId}`);
+                } else if (side === 'Right' && openStateId && !rightFound) {
+                    eyeLinearDriverOpenStateIds.Right = openStateId;
+                    rightFound = true;
+                    console.log(`[ARKit Setup] Found Right eye OpenState: ${openStateId}`);
+                }
+                
+                if (leftFound && rightFound) break;
+            }
+            
+            return eyeLinearDriverOpenStateIds;
+        };
+
         const templateComponents = faceDetail.data.components || [];
         const oscTemplate = templateComponents.find(comp => (comp.type || comp.componentType || '').includes('OSC_Field'));
         const smoothTemplate = templateComponents.find(comp => (comp.type || comp.componentType || '').includes('SmoothValue'));
@@ -800,6 +896,16 @@ export function createArkitSetup({
             } else {
                 console.log(`[ARKit Setup] No AvatarExpressionDriver found`);
             }
+            
+            // Eye ManagerとEyeLinearDriverを探して設定
+            console.log('[ARKit Setup] Setting up Eye Manager...');
+            await findAndSetupEyeManager(avatarDeepResponse.data);
+            if (eyeLinearDriverOpenStateIds.Left) {
+                console.log(`[ARKit Setup] Found Left eye OpenState: ${eyeLinearDriverOpenStateIds.Left}`);
+            }
+            if (eyeLinearDriverOpenStateIds.Right) {
+                console.log(`[ARKit Setup] Found Right eye OpenState: ${eyeLinearDriverOpenStateIds.Right}`);
+            }
         }
 
         const smrPick = await pickSkinnedMeshRenderer(client, avatarSlot);
@@ -860,12 +966,31 @@ export function createArkitSetup({
         const updated = [];
         const idPrefix = `ARKIT_${Date.now()}`;
 
-        // 見つかったブレンドシェイプのみを処理（見つかった名前をそのまま使う）
-        const foundShapes = Object.keys(resolvedMap);
+        // 見つかったブレンドシェイプを処理（見つかった名前をそのまま使う）
+        let foundShapes = Object.keys(resolvedMap);
         console.log(`[ARKit Setup] Found ${foundShapes.length} blendshapes in SMR`);
+        
+        // EyeClosedRight/LeftはEyeLinearDriver経由で直接処理するため、foundShapesに追加
+        if (eyeLinearDriverOpenStateIds.Right && !foundShapes.includes('EyeClosedRight')) {
+            foundShapes = [...foundShapes, 'EyeClosedRight'];
+            console.log('[ARKit Setup] Added EyeClosedRight to process (EyeLinearDriver)');
+        }
+        if (eyeLinearDriverOpenStateIds.Left && !foundShapes.includes('EyeClosedLeft')) {
+            foundShapes = [...foundShapes, 'EyeClosedLeft'];
+            console.log('[ARKit Setup] Added EyeClosedLeft to process (EyeLinearDriver)');
+        }
 
         for (const shapeName of foundShapes) {
-            const fieldId = resolvedMap[shapeName];
+            let fieldId = resolvedMap[shapeName];
+            
+            // EyeClosedRight/Leftの場合、EyeLinearDriverのOpenStateを使用
+            if (shapeName === 'EyeClosedRight' && eyeLinearDriverOpenStateIds.Right) {
+                console.log(`[ARKit Setup] ${shapeName}: Using EyeLinearDriver OpenState instead of blendshape`);
+                fieldId = eyeLinearDriverOpenStateIds.Right;
+            } else if (shapeName === 'EyeClosedLeft' && eyeLinearDriverOpenStateIds.Left) {
+                console.log(`[ARKit Setup] ${shapeName}: Using EyeLinearDriver OpenState instead of blendshape`);
+                fieldId = eyeLinearDriverOpenStateIds.Left;
+            }
 
             const oscPath = buildOscPath(basePath, shapeName);
             const existingOsc = oscByPath.get(oscPath) || null;
@@ -1057,6 +1182,7 @@ export function createArkitSetup({
             createdCount: created.length,
             updatedCount: updated.length,
             foundCount: foundShapes.length,
+            eyeManagerResult: eyeManagerSetupResult,
             created,
             updated
         };

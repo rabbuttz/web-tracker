@@ -15,6 +15,14 @@ interface HandCalibration {
   referenceDepth: number;
 }
 
+interface EyeCalibration {
+  openLeft: number;
+  openRight: number;
+  closedLeft: number;
+  closedRight: number;
+  frameCount: number;
+}
+
 declare global {
   interface Window {
     electronAPI: {
@@ -64,6 +72,14 @@ function App() {
     leftHandSize: null,
     rightHandSize: null,
     referenceDepth: 0.5
+  })
+
+  const eyeCalibrationRef = useRef<EyeCalibration>({
+    openLeft: 1.0,
+    openRight: 1.0,
+    closedLeft: 0.0,
+    closedRight: 0.0,
+    frameCount: 0
   })
 
   const detectedBlendshapeNamesRef = useRef<Set<string>>(new Set())
@@ -368,11 +384,77 @@ function App() {
         return bs?.score ?? 0
       }
 
+      // Auto-calibrating blink normalization
+      // Automatically tracks min (open) and max (closed) values over time
+      const normalizeBlinkValue = (rawValue: number, side: 'left' | 'right') => {
+        const calib = eyeCalibrationRef.current
+
+        // Ignore extreme noise (values too close to 0)
+        if (rawValue < 0.005) {
+          return 0
+        }
+
+        // Update calibration with current observation
+        calib.frameCount++
+
+        if (side === 'left') {
+          // Track minimum (open eyes) - update if we see a lower value
+          if (rawValue < calib.openLeft) {
+            calib.openLeft = rawValue
+          }
+          // Track maximum (closed eyes) - update if we see a higher value
+          if (rawValue > calib.closedLeft) {
+            calib.closedLeft = rawValue
+          }
+
+          // Slowly drift minimum upward to adapt to lighting changes (every ~10 seconds at 30fps)
+          if (calib.frameCount % 300 === 0 && calib.openLeft < calib.closedLeft * 0.5) {
+            calib.openLeft = calib.openLeft * 0.95 + calib.closedLeft * 0.05 * 0.3
+          }
+        } else {
+          if (rawValue < calib.openRight) {
+            calib.openRight = rawValue
+          }
+          if (rawValue > calib.closedRight) {
+            calib.closedRight = rawValue
+          }
+
+          if (calib.frameCount % 300 === 0 && calib.openRight < calib.closedRight * 0.5) {
+            calib.openRight = calib.openRight * 0.95 + calib.closedRight * 0.05 * 0.3
+          }
+        }
+
+        const openVal = side === 'left' ? calib.openLeft : calib.openRight
+        const closedVal = side === 'left' ? calib.closedLeft : calib.closedRight
+
+        // Calculate range - use 75% of observed max as "fully closed" threshold
+        // This makes it easier to fully close eyes without requiring extreme values
+        const effectiveClosedVal = openVal + (closedVal - openVal) * 0.75
+        const range = effectiveClosedVal - openVal
+
+        // If range is too small, not enough data yet - return raw value
+        if (range < 0.05) {
+          return rawValue
+        }
+
+        // Normalize: 0 = open, 1 = closed
+        const normalized = (rawValue - openVal) / range
+        return Math.max(0, Math.min(1, normalized))
+      }
+
       if (expressionModeRef.current === 'blendshape') {
         // Perfect Sync Mode: Send all 52 ARKit blendshapes + corresponding Unified names
         // Using /avatar/parameters/FT/v2/ prefix
         ARKIT_BLENDSHAPES.forEach(shapeName => {
-          const value = getBlendshapeValue(shapeName);
+          let value = getBlendshapeValue(shapeName);
+
+          // Apply eye calibration for blink values
+          if (shapeName === 'eyeBlinkLeft') {
+            value = normalizeBlinkValue(value, 'left')
+          } else if (shapeName === 'eyeBlinkRight') {
+            value = normalizeBlinkValue(value, 'right')
+          }
+
           // ARKit名で送信
           sendParam(`/avatar/parameters/FT/v2/${shapeName}`, [value]);
           // 対応するUnified名でも送信
@@ -478,8 +560,14 @@ function App() {
         sendParam('/avatar/parameters/oh', [v_oh])
 
         // Also send blendshapes for additional expression detail
-        sendParam('/avatar/parameters/Blendshapes/EyeBlinkLeft', [getBlendshapeValue('eyeBlinkLeft')])
-        sendParam('/avatar/parameters/Blendshapes/EyeBlinkRight', [getBlendshapeValue('eyeBlinkRight')])
+        // EyeClosed uses ARKit path for compatibility with FaceTrack setup
+        const eyeBlinkLeft = normalizeBlinkValue(getBlendshapeValue('eyeBlinkLeft'), 'left')
+        const eyeBlinkRight = normalizeBlinkValue(getBlendshapeValue('eyeBlinkRight'), 'right')
+        sendParam('/avatar/parameters/FT/v2/EyeClosedLeft', [eyeBlinkLeft])
+        sendParam('/avatar/parameters/FT/v2/EyeClosedRight', [eyeBlinkRight])
+        // Legacy paths for backward compatibility
+        sendParam('/avatar/parameters/Blendshapes/EyeBlinkLeft', [eyeBlinkLeft])
+        sendParam('/avatar/parameters/Blendshapes/EyeBlinkRight', [eyeBlinkRight])
         sendParam('/avatar/parameters/Blendshapes/BrowInnerUp', [getBlendshapeValue('browInnerUp')])
         sendParam('/avatar/parameters/Blendshapes/CheekPuff', [getBlendshapeValue('cheekPuff')])
 
@@ -641,7 +729,6 @@ function App() {
         blendshapeDebug={blendshapeDebug}
         expressionMode={expressionMode}
         onSetMode={handleSetMode}
-        onSetupArkit={handleSetupArkit}
       />
     </div>
   )
