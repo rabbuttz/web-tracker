@@ -389,11 +389,6 @@ function App() {
       const normalizeBlinkValue = (rawValue: number, side: 'left' | 'right') => {
         const calib = eyeCalibrationRef.current
 
-        // Ignore extreme noise (values too close to 0)
-        if (rawValue < 0.005) {
-          return 0
-        }
-
         // Update calibration with current observation
         calib.frameCount++
 
@@ -422,6 +417,11 @@ function App() {
           if (calib.frameCount % 300 === 0 && calib.openRight < calib.closedRight * 0.5) {
             calib.openRight = calib.openRight * 0.95 + calib.closedRight * 0.05 * 0.3
           }
+        }
+
+        // Ignore extreme noise for output (clamping)
+        if (rawValue < 0.001) {
+          return 0
         }
 
         const openVal = side === 'left' ? calib.openLeft : calib.openRight
