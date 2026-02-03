@@ -3,7 +3,7 @@ import Webcam from 'react-webcam';
 import { type FaceLandmarkerResult, type HandLandmarkerResult } from '@mediapipe/tasks-vision';
 import { quat, vec3, mat3 } from 'gl-matrix';
 import { drawCanvas } from './utils/drawCanvas';
-import { WIDTH, HEIGHT, MIRROR_X, FACE_LM, HAND_LM } from './constants';
+import { WIDTH, HEIGHT, MIRROR_X, FACE_LM, HAND_LM, ARKIT_BLENDSHAPES, ARKIT_TO_UNIFIED_MAP } from './constants';
 import { poseFromHandLandmarks, poseFromFaceLandmarks } from './utils/trackingUtils';
 import { ControlPanel } from './components/ControlPanel';
 import { useMediaPipe } from './hooks/useMediaPipe';
@@ -13,6 +13,14 @@ interface HandCalibration {
   leftHandSize: number | null;
   rightHandSize: number | null;
   referenceDepth: number;
+}
+
+interface EyeCalibration {
+  openLeft: number;
+  openRight: number;
+  closedLeft: number;
+  closedRight: number;
+  frameCount: number;
 }
 
 declare global {
@@ -64,6 +72,14 @@ function App() {
     leftHandSize: null,
     rightHandSize: null,
     referenceDepth: 0.5
+  })
+
+  const eyeCalibrationRef = useRef<EyeCalibration>({
+    openLeft: 1.0,
+    openRight: 1.0,
+    closedLeft: 0.0,
+    closedRight: 0.0,
+    frameCount: 0
   })
 
   const detectedBlendshapeNamesRef = useRef<Set<string>>(new Set())
@@ -131,6 +147,21 @@ function App() {
       const response = await fetch(`http://localhost:3000/setup-facetrack?username=${encodeURIComponent(username)}&port=${port}`);
       const text = await response.text();
       setSetupStatus(text);
+    } catch (error) {
+      setSetupStatus(`Error: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }, [])
+
+  const handleSetupArkit = useCallback(async (username: string, port: number) => {
+    setSetupStatus('Setting up ARKit...');
+    try {
+      const response = await fetch(`http://localhost:3000/setup-arkit?username=${encodeURIComponent(username)}&port=${port}`);
+      const data = await response.json();
+      if (data.success) {
+        setSetupStatus(`Success: Created ${data.createdCount}, Updated ${data.updatedCount}`);
+      } else {
+        setSetupStatus(`Error: ${data.error || 'Failed'}`);
+      }
     } catch (error) {
       setSetupStatus(`Error: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -353,82 +384,92 @@ function App() {
         return bs?.score ?? 0
       }
 
-      if (expressionModeRef.current === 'blendshape') {
-        // Perfect Sync Mode: Calculate aiueo from blendshapes and send to legacy paths
-        const jawOpen = getBlendshapeValue('jawOpen')
-        const mouthPucker = getBlendshapeValue('mouthPucker')
-        const mouthFunnel = getBlendshapeValue('mouthFunnel')
-        const mouthSmileLeft = getBlendshapeValue('mouthSmileLeft')
-        const mouthSmileRight = getBlendshapeValue('mouthSmileRight')
-        const mouthStretchLeft = getBlendshapeValue('mouthStretchLeft')
-        const mouthStretchRight = getBlendshapeValue('mouthStretchRight')
-        const mouthLowerDown = getBlendshapeValue('mouthLowerDownLeft') + getBlendshapeValue('mouthLowerDownRight')
-        const mouthUpperUp = getBlendshapeValue('mouthUpperUpLeft') + getBlendshapeValue('mouthUpperUpRight')
-        const mouthDimpleLeft = getBlendshapeValue('mouthDimpleLeft')
-        const mouthDimpleRight = getBlendshapeValue('mouthDimpleRight')
+      // Auto-calibrating blink normalization
+      // Automatically tracks min (open) and max (closed) values over time
+      const normalizeBlinkValue = (rawValue: number, side: 'left' | 'right') => {
+        const calib = eyeCalibrationRef.current
 
-        // Calculate aiueo from blendshapes
-        // mouthOpenness gate: Use normalized mouth height (actual lip separation)
-        const mouthOpenGate = Math.min(1.0, nHeight / 0.04)
+        // Update calibration with current observation
+        calib.frameCount++
 
-        // aa (あ): primarily jaw open
-        let v_aa = Math.max(0, jawOpen * 1.5 - 0.1) * mouthOpenGate
+        if (side === 'left') {
+          // Track minimum (open eyes) - update if we see a lower value
+          if (rawValue < calib.openLeft) {
+            calib.openLeft = rawValue
+          }
+          // Track maximum (closed eyes) - update if we see a higher value
+          if (rawValue > calib.closedLeft) {
+            calib.closedLeft = rawValue
+          }
 
-        // ih (い): wide smile/stretch
-        const smileAmount = (mouthSmileLeft + mouthSmileRight) * 0.5 + (mouthStretchLeft + mouthStretchRight) * 0.5
-        let v_ih = Math.max(0, smileAmount * 1.3 - 0.1) * mouthOpenGate
+          // Slowly drift minimum upward to adapt to lighting changes (every ~10 seconds at 30fps)
+          if (calib.frameCount % 300 === 0 && calib.openLeft < calib.closedLeft * 0.5) {
+            calib.openLeft = calib.openLeft * 0.95 + calib.closedLeft * 0.05 * 0.3
+          }
+        } else {
+          if (rawValue < calib.openRight) {
+            calib.openRight = rawValue
+          }
+          if (rawValue > calib.closedRight) {
+            calib.closedRight = rawValue
+          }
 
-        // ou (う): pucker/funnel
-        const puckerAmount = mouthPucker * 0.7 + mouthFunnel * 0.3
-        let v_ou = Math.max(0, puckerAmount * 1.0 - 0.3) * mouthOpenGate
-
-        // E (え): mouth open with horizontal stretch (between あ and い)
-        const lipOpen = (mouthLowerDown + mouthUpperUp) * 0.5
-        const eStretch = (mouthStretchLeft + mouthStretchRight) * 0.5
-        const eSmile = (mouthSmileLeft + mouthSmileRight) * 0.3
-        let v_E = Math.min(1.0, Math.max(0, lipOpen + eStretch + eSmile + jawOpen * 0.6) * 1.5) * mouthOpenGate
-
-        // oh (お): jaw open + moderate pucker
-        let v_oh = Math.max(0, (jawOpen * 0.8 + mouthPucker * 0.4) - 0.25) * 1.0 * mouthOpenGate
-
-        // Normalization: sum to 1.5 max
-        const rawValues = [v_aa, v_ih, v_ou, v_E, v_oh]
-        const sum = rawValues.reduce((a, b) => a + b, 0)
-
-        if (sum > 1.5) {
-          const scale = 1.5 / sum
-          v_aa *= scale
-          v_ih *= scale
-          v_ou *= scale
-          v_E *= scale
-          v_oh *= scale
-        } else if (sum <= 0.01) {
-          v_aa = 0.0001
-          v_ih = 0.0001
-          v_ou = 0.0001
-          v_E = 0.0001
-          v_oh = 0.0001
+          if (calib.frameCount % 300 === 0 && calib.openRight < calib.closedRight * 0.5) {
+            calib.openRight = calib.openRight * 0.95 + calib.closedRight * 0.05 * 0.3
+          }
         }
 
-        // Clamp and validate
-        v_aa = isNaN(v_aa) ? 0.0001 : Math.max(0.0001, Math.min(1.0, v_aa))
-        v_ih = isNaN(v_ih) ? 0.0001 : Math.max(0.0001, Math.min(1.0, v_ih))
-        v_ou = isNaN(v_ou) ? 0.0001 : Math.max(0.0001, Math.min(1.0, v_ou))
-        v_E = isNaN(v_E) ? 0.0001 : Math.max(0.0001, Math.min(1.0, v_E))
-        v_oh = isNaN(v_oh) ? 0.0001 : Math.max(0.0001, Math.min(1.0, v_oh))
+        // Ignore extreme noise for output (clamping)
+        if (rawValue < 0.001) {
+          return 0
+        }
 
-        // Send to legacy paths
-        sendParam('/avatar/parameters/aa', [v_aa])
-        sendParam('/avatar/parameters/ih', [v_ih])
-        sendParam('/avatar/parameters/ou', [v_ou])
-        sendParam('/avatar/parameters/E', [v_E])
-        sendParam('/avatar/parameters/oh', [v_oh])
+        const openVal = side === 'left' ? calib.openLeft : calib.openRight
+        const closedVal = side === 'left' ? calib.closedLeft : calib.closedRight
 
-        // Also send additional blendshapes for expressions
-        sendParam('/avatar/parameters/Blendshapes/EyeBlinkLeft', [getBlendshapeValue('eyeBlinkLeft')])
-        sendParam('/avatar/parameters/Blendshapes/EyeBlinkRight', [getBlendshapeValue('eyeBlinkRight')])
-        sendParam('/avatar/parameters/Blendshapes/BrowInnerUp', [getBlendshapeValue('browInnerUp')])
-        sendParam('/avatar/parameters/Blendshapes/CheekPuff', [getBlendshapeValue('cheekPuff')])
+        // Calculate range - use 75% of observed max as "fully closed" threshold
+        // This makes it easier to fully close eyes without requiring extreme values
+        const effectiveClosedVal = openVal + (closedVal - openVal) * 0.75
+        const range = effectiveClosedVal - openVal
+
+        // If range is too small, not enough data yet - return raw value
+        if (range < 0.05) {
+          return rawValue
+        }
+
+        // Normalize: 0 = open, 1 = closed
+        const normalized = (rawValue - openVal) / range
+        return Math.max(0, Math.min(1, normalized))
+      }
+
+      if (expressionModeRef.current === 'blendshape') {
+        // Perfect Sync Mode: Send all 52 ARKit blendshapes + corresponding Unified names
+        // Using /avatar/parameters/FT/v2/ prefix
+        ARKIT_BLENDSHAPES.forEach(shapeName => {
+          let value = getBlendshapeValue(shapeName);
+
+          // Apply eye calibration for blink values
+          if (shapeName === 'eyeBlinkLeft') {
+            value = normalizeBlinkValue(value, 'left')
+          } else if (shapeName === 'eyeBlinkRight') {
+            value = normalizeBlinkValue(value, 'right')
+          }
+
+          // ARKit名で送信
+          sendParam(`/avatar/parameters/FT/v2/${shapeName}`, [value]);
+          // 対応するUnified名でも送信
+          const unifiedName = ARKIT_TO_UNIFIED_MAP[shapeName];
+          if (unifiedName) {
+            sendParam(`/avatar/parameters/FT/v2/${unifiedName}`, [value]);
+          }
+        });
+
+        // Suppress visemes in Perfect Sync mode to prevent interference
+        sendParam('/avatar/parameters/aa', [0.0001])
+        sendParam('/avatar/parameters/ih', [0.0001])
+        sendParam('/avatar/parameters/ou', [0.0001])
+        sendParam('/avatar/parameters/E', [0.0001])
+        sendParam('/avatar/parameters/oh', [0.0001])
 
         if (blendshapes) {
           // Update blendshape debug display - remember names that exceeded threshold
@@ -519,8 +560,14 @@ function App() {
         sendParam('/avatar/parameters/oh', [v_oh])
 
         // Also send blendshapes for additional expression detail
-        sendParam('/avatar/parameters/Blendshapes/EyeBlinkLeft', [getBlendshapeValue('eyeBlinkLeft')])
-        sendParam('/avatar/parameters/Blendshapes/EyeBlinkRight', [getBlendshapeValue('eyeBlinkRight')])
+        // EyeClosed uses ARKit path for compatibility with FaceTrack setup
+        const eyeBlinkLeft = normalizeBlinkValue(getBlendshapeValue('eyeBlinkLeft'), 'left')
+        const eyeBlinkRight = normalizeBlinkValue(getBlendshapeValue('eyeBlinkRight'), 'right')
+        sendParam('/avatar/parameters/FT/v2/EyeClosedLeft', [eyeBlinkLeft])
+        sendParam('/avatar/parameters/FT/v2/EyeClosedRight', [eyeBlinkRight])
+        // Legacy paths for backward compatibility
+        sendParam('/avatar/parameters/Blendshapes/EyeBlinkLeft', [eyeBlinkLeft])
+        sendParam('/avatar/parameters/Blendshapes/EyeBlinkRight', [eyeBlinkRight])
         sendParam('/avatar/parameters/Blendshapes/BrowInnerUp', [getBlendshapeValue('browInnerUp')])
         sendParam('/avatar/parameters/Blendshapes/CheekPuff', [getBlendshapeValue('cheekPuff')])
 
