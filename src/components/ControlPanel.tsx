@@ -280,7 +280,29 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
 					background: rgba(200, 80, 80, 0.7);
 					border-color: rgba(255, 100, 100, 0.5);
 				}
-				.checkbox-label {
+				.eye-calib-button {
+					background: rgba(60, 150, 180, 0.5);
+					border-color: rgba(100, 200, 255, 0.3);
+				}
+				.eye-calib-button:hover:not(:disabled) {
+					background: rgba(80, 170, 200, 0.7);
+					border-color: rgba(100, 200, 255, 0.5);
+				}
+				.neutral-calib-button {
+					background: rgba(100, 100, 100, 0.4);
+					border-color: rgba(150, 150, 150, 0.3);
+				}
+				.neutral-calib-button:hover:not(:disabled) {
+					background: rgba(120, 120, 120, 0.6);
+				}
+				.max-calib-button {
+					background: rgba(200, 80, 80, 0.4);
+					border-color: rgba(255, 100, 100, 0.3);
+				}
+				.max-calib-button:hover:not(:disabled) {
+					background: rgba(220, 100, 100, 0.6);
+				}
+				.checkbox-label, .toggle-container {
 					display: flex;
 					align-items: center;
 					gap: 8px;

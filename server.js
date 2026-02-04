@@ -1,6 +1,7 @@
 import express from 'express';
 import WebSocket from 'ws';
 import { v4 as uuidv4 } from 'uuid';
+import { createArkitSetup } from './arkit-setup.js';
 
 const WEB_PORT = 3000;
 const DEFAULT_RESONITE_PORT = 10534;
@@ -116,13 +117,37 @@ class ResoniteLinkClient {
         return this.sendMessage({
             $type: 'updateComponent',
             messageId: uuidv4(),
-            data: { id: componentId, members }
+            data: {
+                id: componentId,
+                members
+            }
         });
     }
 
     async getComponent(componentId) {
         return this.sendMessage({
             $type: 'getComponent',
+            messageId: uuidv4(),
+            componentId
+        });
+    }
+
+    async addComponent(slotId, componentType, members = {}, componentId = null) {
+        return this.sendMessage({
+            $type: 'addComponent',
+            messageId: uuidv4(),
+            containerSlotId: slotId,
+            data: {
+                componentType,
+                members,
+                id: componentId
+            }
+        });
+    }
+
+    async removeComponent(componentId) {
+        return this.sendMessage({
+            $type: 'removeComponent',
             messageId: uuidv4(),
             componentId
         });
@@ -143,10 +168,26 @@ function getSlotName(slot) {
 }
 
 function findChildByName(slot, name) {
-    if (!slot.children) return null;
+    if (!slot || !slot.children) return null;
     return slot.children.find(child => getSlotName(child) === name);
 }
 
+const arkitSetup = createArkitSetup({
+    ResoniteLinkClient,
+    defaultResonitePort: DEFAULT_RESONITE_PORT,
+    getSlotName,
+    findChildByName,
+    getResoniteClient: () => resoniteClient,
+    setResoniteClient: (client) => { resoniteClient = client; },
+    getCurrentResonitePort: () => currentResonitePort,
+    setCurrentResonitePort: (port) => { currentResonitePort = port; },
+    getIsSettingUp: () => isSettingUp,
+    setIsSettingUp: (value) => { isSettingUp = value; }
+});
+
+arkitSetup.registerArkitRoutes(app);
+
+// Setup EyeManager to disable auto-blink by setting MinBlinkInterval to Infinity
 // Setup Mouth shape keys from DirectVisemeDriver
 async function setupMouthShapeKeys(client, avatarSlot, faceTrackSlot) {
     console.log('[Mouth Setup] Starting...');
@@ -260,6 +301,7 @@ async function setupMouthShapeKeys(client, avatarSlot, faceTrackSlot) {
 
         if (smr) {
             console.log(`[Mouth Setup] Found SkinnedMeshRenderer in slot: ${getSlotName(childSlot)}`);
+
             const smrDetail = await client.getComponent(smr.id);
             if (smrDetail.success) {
                 skinnedMeshRenderer = smrDetail.data;
@@ -469,6 +511,14 @@ app.get('/setup-facetrack', async (req, res) => {
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
     const username = req.query.username;
     const port = parseInt(req.query.port) || DEFAULT_RESONITE_PORT;
+    const arkitParam = req.query.arkit;
+    const runArkit = arkitParam === undefined
+        ? true
+        : !['0', 'false', 'no'].includes(String(arkitParam).toLowerCase());
+    const arkitLimit = req.query.arkitLimit ? parseInt(req.query.arkitLimit, 10) : undefined;
+    const arkitBatch = req.query.arkitBatch ? parseInt(req.query.arkitBatch, 10) : undefined;
+    const arkitDebugSelf = req.query.arkitDebugSelf === '1';
+    const arkitNoType = req.query.arkitNoType === '1';
 
     if (!username) {
         return res.status(400).send("Error: Username parameter required / エラー: usernameパラメータが必須です。");
@@ -690,11 +740,30 @@ app.get('/setup-facetrack', async (req, res) => {
         }
         console.log(`[FaceTrack] All VariableNames found in DV slot: ${dvVarsFound.join(', ')}`);
 
+        // Mouth setup
         console.log('[FaceTrack] Starting mouth setup...');
         const mouthSetupResult = await setupMouthShapeKeys(resoniteClient, avatarSlot, faceTrackDetail.data);
         console.log(`[FaceTrack] Mouth setup complete: ${mouthSetupResult}`);
 
-        const successMessage = `Success: Setup complete for "${username}".${mouthSetupResult} / 成功: "${username}" のセットアップが完了しました。${mouthSetupResult}`;
+        // ARKit setup (includes EyeManager setup - auto-blink disable + EyeClosed to EyeLinearDriver)
+        let arkitSummary = '';
+        let eyeManagerResult = '';
+        if (runArkit) {
+            console.log('[FaceTrack] Starting ARKit setup...');
+            const arkitResult = await arkitSetup.runArkitSetup({
+                username,
+                port,
+                limit: arkitLimit,
+                debugSelf: arkitDebugSelf,
+                noType: arkitNoType,
+                batch: arkitBatch
+            });
+            eyeManagerResult = arkitResult.eyeManagerResult || '';
+            arkitSummary = ` ARKit: created ${arkitResult.createdCount}, updated ${arkitResult.updatedCount}, found ${arkitResult.foundCount}.`;
+            console.log(`[FaceTrack] ARKit setup complete: ${eyeManagerResult}${arkitSummary.trim()}`);
+        }
+
+        const successMessage = `Success: Setup complete for "${username}".${mouthSetupResult}${eyeManagerResult}${arkitSummary} / 成功: "${username}" のセットアップが完了しました。${mouthSetupResult}${eyeManagerResult}${arkitSummary}`;
         console.log(`[FaceTrack] Sending success response...`);
         res.send(successMessage);
         console.log('[FaceTrack] Response sent!');
