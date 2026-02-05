@@ -3,6 +3,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('electronAPI', {
     oscSend: (path, value) => ipcRenderer.send('osc-send', { path, value }),
     onWindowVisibilityChange: (callback) => ipcRenderer.on('window-visibility-change', (event, isVisible) => callback(isVisible)),
+    onAutoHideNotice: (callback) => ipcRenderer.on('auto-hide-notice', (event, payload) => callback(payload)),
     log: (level, ...args) => ipcRenderer.send('renderer-log', { level, args }),
     notifyTrackingStarted: () => ipcRenderer.send('tracking-started')
 });

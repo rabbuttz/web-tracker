@@ -22,6 +22,8 @@ interface ControlPanelProps {
 	onSetMode: (mode: 'visemeBlendshape' | 'blendshape') => void;
 	autoCalibrate: boolean;
 	onAutoCalibrateChange: (enabled: boolean) => void;
+	blinkSyncEnabled: boolean;
+	onBlinkSyncChange: (enabled: boolean) => void;
 	setupStatus: string;
 	resoniteUsername: string;
 	onResoniteUsernameChange: (name: string) => void;
@@ -44,6 +46,8 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
 	onSetMode,
 	autoCalibrate,
 	onAutoCalibrateChange,
+	blinkSyncEnabled,
+	onBlinkSyncChange,
 	setupStatus,
 	resoniteUsername,
 	onResoniteUsernameChange,
@@ -106,6 +110,18 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
 						className="glass-checkbox"
 					/>
 					<span>Auto Calibrate (5s still)</span>
+				</label>
+			</div>
+
+			<div className="control-group">
+				<label className="checkbox-label">
+					<input
+						type="checkbox"
+						checked={blinkSyncEnabled}
+						onChange={(e) => onBlinkSyncChange(e.target.checked)}
+						className="glass-checkbox"
+					/>
+					<span>Blink Sync (L+R Avg)</span>
 				</label>
 			</div>
 

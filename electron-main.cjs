@@ -2,8 +2,12 @@ const { app, BrowserWindow, ipcMain, Tray, Menu, Notification } = require('elect
 const path = require('path');
 const fs = require('fs');
 const osc = require('node-osc');
-const { spawn, exec } = require('child_process');
+const { spawn } = require('child_process');
+const http = require('http');
 const AutoLaunch = require('auto-launch');
+
+app.setName('WebCamTracker4Resonite');
+app.setAppUserModelId('com.rabbuttz.webcamtracker4resonite');
 
 // Logging setup (local time)
 const LOG_DIR = app.getPath('logs');
@@ -85,16 +89,44 @@ initLogging();
 
 const oscClient = new osc.Client('127.0.0.1', 9000);
 let serverProcess = null;
-let resoniteMonitorInterval = null;
+let resoniteSignalInterval = null;
 let mainWindow = null;
 let tray = null;
 let manuallyOpened = false;
 let isQuitting = false;
 let lastResoniteState = false;
+let lastResoniteSignalAt = 0;
+let lastResoniteMode = 'unknown';
 let trackingEnabled = false;
 let manualTrackingOverride = false;  // User manually enabled tracking despite VR
-const RESONITE_PROCESS_NAME = 'Resonite.exe';
-const MONITOR_INTERVAL_MS = 5000;
+let manualTrackingDisabled = false;
+let autoHideTimer = null;
+const RESONITE_SIGNAL_TIMEOUT_MS = 9000;
+const RESONITE_SIGNAL_CHECK_MS = 1000;
+const RESONITE_SIGNAL_POLL_URL = 'http://localhost:3000/resonite-signal-status';
+const RESONITE_SIGNAL_POLL_TIMEOUT_MS = 1200;
+const AUTO_HIDE_NOTICE_MS = 1400;
+
+function showAutoHideNoticeAndHide() {
+    if (!mainWindow || mainWindow.isDestroyed()) {
+        return;
+    }
+    if (autoHideTimer) {
+        clearTimeout(autoHideTimer);
+        autoHideTimer = null;
+    }
+    try {
+        mainWindow.webContents.send('auto-hide-notice', { durationMs: AUTO_HIDE_NOTICE_MS });
+    } catch (err) {
+        console.warn('[Electron] Failed to send auto-hide notice:', err);
+    }
+    autoHideTimer = setTimeout(() => {
+        autoHideTimer = null;
+        if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.hide();
+        }
+    }, AUTO_HIDE_NOTICE_MS);
+}
 
 // Helper function to format vectors for OSC
 function formatVec(values) {
@@ -176,52 +208,131 @@ if (!gotTheLock) {
     });
 }
 
-async function isResoniteRunning() {
-    return new Promise((resolve) => {
-        if (process.platform === 'win32') {
-            exec(`tasklist /FI "IMAGENAME eq ${RESONITE_PROCESS_NAME}" /NH`, (err, stdout) => {
-                if (err) {
-                    resolve(false);
-                    return;
-                }
-                resolve(stdout.toLowerCase().includes(RESONITE_PROCESS_NAME.toLowerCase()));
-            });
-        } else {
-            exec(`pgrep -x Resonite`, (err, stdout) => {
-                resolve(!err && stdout.trim().length > 0);
-            });
-        }
-    });
+function isResoniteSignalActive() {
+    return lastResoniteState;
 }
 
-async function isProcessRunning(processName) {
-    return new Promise((resolve) => {
-        if (process.platform === 'win32') {
-            exec(`tasklist /FI "IMAGENAME eq ${processName}" /NH`, (err, stdout) => {
-                if (err) {
-                    resolve(false);
-                    return;
-                }
-                resolve(stdout.toLowerCase().includes(processName.toLowerCase()));
-            });
-        } else {
-            // For non-Windows platforms, assume not running
-            resolve(false);
-        }
-    });
+function normalizeResoniteMode(value) {
+    const raw = String(value ?? '').trim().toLowerCase();
+    if (!raw) return 'unknown';
+    if (['vr', 'virtual', 'steamvr', 'oculus', 'openxr'].includes(raw)) return 'vr';
+    if (['desktop', 'desk', 'flat', 'nonvr', 'non-vr', 'monitor'].includes(raw)) return 'desktop';
+    if (['1', 'true', 'yes'].includes(raw)) return 'vr';
+    if (['0', 'false', 'no'].includes(raw)) return 'desktop';
+    return 'unknown';
 }
 
-async function isVRRuntimeActive() {
-    // Check for SteamVR
-    const steamVR = await isProcessRunning('vrserver.exe');
-    // Check for Oculus Runtime
-    const oculus = await isProcessRunning('OculusClient.exe');
+function getResoniteModeLabel(mode) {
+    return mode === 'vr' ? 'VR' : mode === 'desktop' ? 'Desktop' : 'Unknown';
+}
 
-    const isActive = steamVR || oculus;
-    if (isActive) {
-        console.log('[Electron] VR Runtime detected:', steamVR ? 'SteamVR' : 'Oculus');
+async function applyResoniteMode(mode, { notifyOnStart = false, notifyOnChange = false } = {}) {
+    if (mode === 'vr' && !manualTrackingOverride) {
+        if (trackingEnabled) {
+            stopTracking();
+        }
+        if (notifyOnStart || notifyOnChange) {
+            const notification = new Notification({
+                title: 'WebCamTracker4Resonite',
+                body: 'Resonite signal detected in VR mode. Tracking disabled. Enable manually from tray if needed.',
+                icon: path.join(__dirname, 'build', 'icon.png')
+            });
+            notification.show();
+        }
+        return;
     }
-    return isActive;
+
+    if (manualTrackingDisabled) {
+        return;
+    }
+
+    if (!trackingEnabled) {
+        await startTracking();
+        if (notifyOnStart) {
+            const notification = new Notification({
+                title: 'WebCamTracker4Resonite',
+                body: 'Resonite signal detected. Tracking started in background.',
+                icon: path.join(__dirname, 'build', 'icon.png')
+            });
+            notification.show();
+        }
+    }
+}
+
+function fetchResoniteSignalStatus() {
+    return new Promise((resolve) => {
+        const req = http.get(RESONITE_SIGNAL_POLL_URL, { timeout: RESONITE_SIGNAL_POLL_TIMEOUT_MS }, (res) => {
+            if (!res || res.statusCode !== 200) {
+                res?.resume();
+                resolve(null);
+                return;
+            }
+            let data = '';
+            res.setEncoding('utf8');
+            res.on('data', (chunk) => {
+                data += chunk;
+            });
+            res.on('end', () => {
+                try {
+                    resolve(JSON.parse(data));
+                } catch {
+                    resolve(null);
+                }
+            });
+        });
+
+        req.on('timeout', () => {
+            req.destroy();
+            resolve(null);
+        });
+
+        req.on('error', () => {
+            resolve(null);
+        });
+    });
+}
+
+async function pollResoniteSignalStatus() {
+    if (serverProcess && serverProcess.connected) {
+        return;
+    }
+
+    const status = await fetchResoniteSignalStatus();
+    if (!status || !status.lastSignalAt) {
+        return;
+    }
+
+    if (status.lastSignalAt <= lastResoniteSignalAt) {
+        return;
+    }
+
+    handleResoniteSignal({ mode: status.mode, at: status.lastSignalAt });
+}
+
+function handleResoniteSignal(payload) {
+    const mode = normalizeResoniteMode(payload?.mode ?? payload?.vr ?? payload?.isVr);
+    const now = Date.now();
+    const signalAt = Number.isFinite(payload?.at) ? payload.at : now;
+    const wasActive = lastResoniteState;
+    const previousMode = lastResoniteMode;
+
+    lastResoniteSignalAt = Math.max(lastResoniteSignalAt, signalAt);
+    lastResoniteState = true;
+    lastResoniteMode = mode;
+
+    if (!wasActive) {
+        console.log(`[Electron] Resonite signal started (mode: ${getResoniteModeLabel(mode)})`);
+        void applyResoniteMode(mode, { notifyOnStart: true });
+        return;
+    }
+
+    if (previousMode !== mode && mode !== 'unknown') {
+        console.log(`[Electron] Resonite mode changed (${getResoniteModeLabel(previousMode)} -> ${getResoniteModeLabel(mode)})`);
+        void applyResoniteMode(mode, { notifyOnChange: true });
+        return;
+    }
+
+    void applyResoniteMode(mode);
 }
 
 async function startTracking() {
@@ -279,8 +390,6 @@ function stopTracking() {
         updateTrayMenu();
     }
 
-    killServerProcess();
-
     // Destroy window to stop camera and tracking (unless manually opened by user)
     if (mainWindow && !manuallyOpened) {
         console.log('[Electron] Destroying window to stop camera and tracking');
@@ -290,56 +399,31 @@ function stopTracking() {
 }
 
 function startResoniteMonitor() {
-    if (resoniteMonitorInterval) {
-        clearInterval(resoniteMonitorInterval);
+    if (resoniteSignalInterval) {
+        clearInterval(resoniteSignalInterval);
     }
 
-    console.log('[Electron] Starting Resonite monitor...');
+    console.log('[Electron] Starting Resonite signal monitor...');
 
-    resoniteMonitorInterval = setInterval(async () => {
-        const running = await isResoniteRunning();
+    resoniteSignalInterval = setInterval(async () => {
+        await pollResoniteSignalStatus();
+        if (!lastResoniteSignalAt) return;
 
-        // Only react to state changes
-        if (running && !lastResoniteState) {
-            // Resonite just started
-            console.log('[Electron] Resonite started.');
-            lastResoniteState = true;
-
-            // Check if VR runtime is active
-            const vrActive = await isVRRuntimeActive();
-
-            if (vrActive && !manualTrackingOverride) {
-                console.log('[Electron] VR mode detected. Tracking disabled by default.');
-                const notification = new Notification({
-                    title: 'WebCamTracker4Resonite',
-                    body: 'Resonite detected in VR mode. Tracking disabled. Enable manually from tray if needed.',
-                    icon: path.join(__dirname, 'build', 'icon.png')
-                });
-                notification.show();
-            } else {
-                // Start tracking automatically
-                await startTracking();
-                const notification = new Notification({
-                    title: 'WebCamTracker4Resonite',
-                    body: 'Resonite detected. Tracking started in background.',
-                    icon: path.join(__dirname, 'build', 'icon.png')
-                });
-                notification.show();
-            }
-        } else if (!running && lastResoniteState) {
-            // Resonite just stopped
-            console.log('[Electron] Resonite stopped.');
+        const now = Date.now();
+        if (lastResoniteState && now - lastResoniteSignalAt > RESONITE_SIGNAL_TIMEOUT_MS) {
+            console.log('[Electron] Resonite signal timed out.');
             lastResoniteState = false;
+            manualTrackingDisabled = false;
             stopTracking();
         }
-    }, MONITOR_INTERVAL_MS);
+    }, RESONITE_SIGNAL_CHECK_MS);
 }
 
 function stopResoniteMonitor() {
-    if (resoniteMonitorInterval) {
-        clearInterval(resoniteMonitorInterval);
-        resoniteMonitorInterval = null;
-        console.log('[Electron] Resonite monitor stopped.');
+    if (resoniteSignalInterval) {
+        clearInterval(resoniteSignalInterval);
+        resoniteSignalInterval = null;
+        console.log('[Electron] Resonite signal monitor stopped.');
     }
 }
 
@@ -368,9 +452,11 @@ function updateTrayMenu() {
             enabled: lastResoniteState,  // Only enabled when Resonite is running
             click: async () => {
                 if (trackingEnabled) {
+                    manualTrackingDisabled = true;
                     stopTracking();
                 } else {
-                    manualTrackingOverride = true;  // User manually enabled despite VR
+                    manualTrackingDisabled = false;
+                    manualTrackingOverride = lastResoniteMode === 'vr';  // User manually enabled despite VR
                     await startTracking();
                 }
             }
@@ -487,23 +573,19 @@ function createWindow(showWindow = true) {
         // Prevent window from closing
         event.preventDefault();
 
-        // Check if Resonite is running
-        const resoniteRunning = await isResoniteRunning();
+        const resoniteActive = isResoniteSignalActive();
 
-        if (!resoniteRunning) {
-            // Resonite is not running - stop tracking and destroy window to release camera
-            console.log('[Electron] Window closed while Resonite is not running. Stopping tracker and releasing camera...');
-            if (serverProcess) {
-                killServerProcess();
-            }
+        if (!resoniteActive) {
+            // No signal - stop tracking and destroy window to release camera
+            console.log('[Electron] Window closed while Resonite signal is inactive. Stopping tracker and releasing camera...');
             if (tray) {
                 tray.setToolTip('WebCamTracker4Resonite - Waiting for Resonite...');
             }
             // Destroy window to release camera resources
             mainWindow.destroy();
         } else {
-            // Resonite is running - just hide the window, keep tracking
-            mainWindow.hide();
+            // Signal active - just hide the window, keep tracking
+            showAutoHideNoticeAndHide();
         }
     });
 
@@ -533,6 +615,10 @@ function createWindow(showWindow = true) {
 function startServer() {
     const isDev = process.env.NODE_ENV === 'development';
 
+    if (serverProcess) {
+        return;
+    }
+
     if (!isDev) {
         // In production, start server.mjs from unpacked directory if available
         let serverPath = path.join(__dirname, 'server.mjs');
@@ -545,7 +631,7 @@ function startServer() {
         console.log('[Electron] Starting server at:', serverPath);
 
         serverProcess = spawn(process.execPath, [serverPath], {
-            stdio: ['ignore', 'pipe', 'pipe'],  // stdin: ignore, stdout: pipe, stderr: pipe
+            stdio: ['ignore', 'pipe', 'pipe', 'ipc'],  // stdin: ignore, stdout/stderr: pipe, ipc enabled
             shell: false,
             env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }
         });
@@ -562,8 +648,15 @@ function startServer() {
             console.error('[Electron] Server error:', err);
         });
 
+        serverProcess.on('message', (payload) => {
+            if (payload?.type === 'resonite-signal') {
+                handleResoniteSignal(payload);
+            }
+        });
+
         serverProcess.on('exit', (code) => {
             console.log(`[Electron] Server exited with code ${code}`);
+            serverProcess = null;
         });
     } else {
         console.log('[Electron] Development mode - server should be started manually (npm run dev)');
@@ -582,35 +675,14 @@ app.whenReady().then(async () => {
 
     createTray();
 
-    const resoniteRunning = await isResoniteRunning();
-    lastResoniteState = resoniteRunning;
+    startServer();
 
-    if (resoniteRunning) {
-        console.log('[Electron] Resonite is running at startup.');
+    lastResoniteState = false;
+    lastResoniteSignalAt = 0;
+    lastResoniteMode = 'unknown';
+    manualTrackingDisabled = false;
 
-        // Check if VR runtime is active
-        const vrActive = await isVRRuntimeActive();
-
-        if (vrActive) {
-            console.log('[Electron] VR mode detected at startup. Tracking disabled by default.');
-            const notification = new Notification({
-                title: 'WebCamTracker4Resonite',
-                body: 'Resonite detected in VR mode. Tracking disabled. Enable manually from tray if needed.',
-                icon: path.join(__dirname, 'build', 'icon.png')
-            });
-            notification.show();
-        } else {
-            await startTracking();
-            const notification = new Notification({
-                title: 'WebCamTracker4Resonite',
-                body: 'Resonite detected. Tracking started in background.',
-                icon: path.join(__dirname, 'build', 'icon.png')
-            });
-            notification.show();
-        }
-    } else {
-        console.log('[Electron] Resonite is not running. Waiting in background...');
-    }
+    console.log('[Electron] Waiting for Resonite signal...');
 
     startResoniteMonitor();
 
@@ -712,6 +784,6 @@ ipcMain.on('tracking-started', () => {
     // Hide window if it was auto-opened for background tracking
     if (mainWindow && !manuallyOpened) {
         console.log('[Electron] Tracking confirmed - hiding window for background operation');
-        mainWindow.hide();
+        showAutoHideNoticeAndHide();
     }
 });

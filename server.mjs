@@ -157,9 +157,56 @@ class ResoniteLinkClient {
 let resoniteClient = null;
 let currentResonitePort = null;
 let isSettingUp = false;
+let lastResoniteSignalAt = 0;
+let lastResoniteSignalMode = 'unknown';
 
 const app = express();
 app.use(express.json());
+app.use((req, res, next) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    if (req.method === 'OPTIONS') {
+        res.sendStatus(204);
+        return;
+    }
+    next();
+});
+
+const CONTROL_QUEUE_MAX = 100;
+const controlCommands = [];
+
+function enqueueControlCommand(command) {
+    if (controlCommands.length >= CONTROL_QUEUE_MAX) {
+        controlCommands.shift();
+    }
+    controlCommands.push({ ...command, queuedAt: Date.now() });
+}
+
+function normalizeResoniteModeParam(value) {
+    const raw = String(value ?? '').trim().toLowerCase();
+    if (!raw) return 'unknown';
+    if (['vr', 'virtual', 'steamvr', 'oculus', 'openxr'].includes(raw)) return 'vr';
+    if (['desktop', 'desk', 'flat', 'nonvr', 'non-vr', 'monitor'].includes(raw)) return 'desktop';
+    if (['1', 'true', 'yes'].includes(raw)) return 'vr';
+    if (['0', 'false', 'no'].includes(raw)) return 'desktop';
+    return 'unknown';
+}
+
+function resolveResoniteMode(query) {
+    const modeParam = normalizeResoniteModeParam(query.mode);
+    if (modeParam !== 'unknown') return modeParam;
+    const vrParam = normalizeResoniteModeParam(query.vr ?? query.isVr ?? query.isVR);
+    return vrParam;
+}
+
+function sendResoniteSignal(mode) {
+    lastResoniteSignalAt = Date.now();
+    lastResoniteSignalMode = mode || 'unknown';
+    if (typeof process.send === 'function') {
+        process.send({ type: 'resonite-signal', mode: lastResoniteSignalMode, at: lastResoniteSignalAt });
+    }
+}
 
 // Helper functions (extracted from ResoniteLink logic)
 function getSlotName(slot) {
@@ -186,6 +233,47 @@ const arkitSetup = createArkitSetup({
 });
 
 arkitSetup.registerArkitRoutes(app);
+
+app.get('/resonite-signal', (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    const mode = resolveResoniteMode(req.query);
+    sendResoniteSignal(mode);
+    res.json({ ok: true, mode });
+});
+
+app.get('/resonite-signal-status', (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({
+        ok: true,
+        mode: lastResoniteSignalMode,
+        lastSignalAt: lastResoniteSignalAt
+    });
+});
+
+app.get('/calibrate', (req, res) => {
+    const type = String(req.query.type || '').toLowerCase();
+    if (type !== 'head' && type !== 'hand') {
+        res.status(400).send('type must be head or hand');
+        return;
+    }
+    enqueueControlCommand({ type: 'calibrate', target: type });
+    res.send('OK');
+});
+
+app.get('/auto-calibrate', (req, res) => {
+    const enabledParam = String(req.query.enabled || '').toLowerCase();
+    if (enabledParam !== 'true' && enabledParam !== 'false') {
+        res.status(400).send('enabled must be true or false');
+        return;
+    }
+    enqueueControlCommand({ type: 'auto-calibrate', enabled: enabledParam === 'true' });
+    res.send('OK');
+});
+
+app.get('/control-commands', (req, res) => {
+    const pending = controlCommands.splice(0, controlCommands.length);
+    res.json(pending);
+});
 
 // Setup EyeManager to disable auto-blink by setting MinBlinkInterval to Infinity
 // Setup Mouth shape keys from DirectVisemeDriver

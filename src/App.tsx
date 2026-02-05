@@ -43,7 +43,12 @@ interface BlinkHistory {
   openSamples: number[];
 }
 
+type ControlCommand =
+  | { type: 'calibrate'; target: 'head' | 'hand'; queuedAt?: number }
+  | { type: 'auto-calibrate'; enabled: boolean; queuedAt?: number };
+
 const BLINK_HISTORY_SIZE = 5;
+const CONTROL_POLL_INTERVAL_MS = 500;
 
 const createBlinkHistory = (): BlinkHistory => ({
   inBlink: false,
@@ -56,6 +61,7 @@ declare global {
     electronAPI: {
       oscSend: (path: string, value: number | number[] | string) => void;
       onWindowVisibilityChange: (callback: (isVisible: boolean) => void) => void;
+      onAutoHideNotice: (callback: (payload?: { durationMs?: number }) => void) => void;
       log: (level: 'log' | 'info' | 'warn' | 'error', ...args: any[]) => void;
       notifyTrackingStarted: () => void;
     };
@@ -77,10 +83,12 @@ function App() {
   const [isLoading, setIsLoading] = useState<boolean>(true)
   const [expressionMode, setExpressionMode] = useState<'visemeBlendshape' | 'blendshape'>('visemeBlendshape')
   const [autoCalibrate, setAutoCalibrate] = useState<boolean>(true)
+  const [blinkSyncEnabled, setBlinkSyncEnabled] = useState<boolean>(false)
   const [isWindowVisible, setIsWindowVisible] = useState<boolean>(true)
   const [setupStatus, setSetupStatus] = useState<string>('')
   const [resoniteUsername, setResoniteUsername] = useState<string>(localStorage.getItem('resoniteUsername') || '')
   const [resonitePort, setResonitePort] = useState<number>(Number(localStorage.getItem('resonitePort')) || 10534)
+  const [showAutoHideNotice, setShowAutoHideNotice] = useState<boolean>(false)
   const [mouthDebug, setMouthDebug] = useState<{
     nHeight: number;
     nWidth: number;
@@ -95,6 +103,8 @@ function App() {
 
   const [videoElement, setVideoElement] = useState<HTMLVideoElement | null>(null);
   const firstTrackingFrameRef = useRef<boolean>(false);
+  const controlPollErrorRef = useRef<number>(0);
+  const autoHideNoticeTimerRef = useRef<number | null>(null);
 
   const webcamRef = useRef<Webcam>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -131,6 +141,7 @@ function App() {
   const detectedBlendshapeNamesRef = useRef<Set<string>>(new Set())
   const debugUpdateCounterRef = useRef(0)
   const expressionModeRef = useRef<'visemeBlendshape' | 'blendshape'>(expressionMode)
+  const blinkSyncEnabledRef = useRef<boolean>(blinkSyncEnabled)
 
   // Auto-calibration refs
   const lastHeadPoseRef = useRef<{ position: vec3; quaternion: quat } | null>(null)
@@ -149,6 +160,11 @@ function App() {
   useEffect(() => {
     expressionModeRef.current = expressionMode
   }, [expressionMode])
+
+  // Keep blink sync ref in sync with state
+  useEffect(() => {
+    blinkSyncEnabledRef.current = blinkSyncEnabled
+  }, [blinkSyncEnabled])
 
   const threeStateRef = useThreeManager(threeCanvasRef.current)
 
@@ -669,6 +685,16 @@ function App() {
         return Math.max(0, Math.min(1, normalized))
       }
 
+      const rawBlinkLeft = getBlendshapeValue('eyeBlinkLeft')
+      const rawBlinkRight = getBlendshapeValue('eyeBlinkRight')
+      let eyeBlinkLeft = normalizeBlinkValue(rawBlinkLeft, 'left')
+      let eyeBlinkRight = normalizeBlinkValue(rawBlinkRight, 'right')
+      if (blinkSyncEnabledRef.current) {
+        const synced = (eyeBlinkLeft + eyeBlinkRight) * 0.5
+        eyeBlinkLeft = synced
+        eyeBlinkRight = synced
+      }
+
       if (expressionModeRef.current === 'blendshape') {
         // Perfect Sync Mode: Calculate aiueo from blendshapes and send to legacy paths
         // ここはまだ実装途中 by tatsuさん なので、今は一旦コメントアウトしてるだけなので指示があるまでは勝手に消さないで
@@ -680,11 +706,11 @@ function App() {
         ARKIT_BLENDSHAPES.forEach(shapeName => {
           let value = getBlendshapeValue(shapeName);
 
-          // Apply eye calibration for blink values
+          // Apply eye calibration for blink values (optionally synced)
           if (shapeName === 'eyeBlinkLeft') {
-            value = normalizeBlinkValue(value, 'left')
+            value = eyeBlinkLeft
           } else if (shapeName === 'eyeBlinkRight') {
-            value = normalizeBlinkValue(value, 'right')
+            value = eyeBlinkRight
           }
 
           // ARKit名で送信
@@ -794,8 +820,6 @@ function App() {
 
         // Also send blendshapes for additional expression detail
         // EyeClosed uses ARKit path for compatibility with FaceTrack setup
-        const eyeBlinkLeft = normalizeBlinkValue(getBlendshapeValue('eyeBlinkLeft'), 'left')
-        const eyeBlinkRight = normalizeBlinkValue(getBlendshapeValue('eyeBlinkRight'), 'right')
         sendParam('/avatar/parameters/FT/v2/EyeClosedLeft', [eyeBlinkLeft])
         sendParam('/avatar/parameters/FT/v2/EyeClosedRight', [eyeBlinkRight])
         // Legacy paths for backward compatibility
@@ -844,8 +868,29 @@ function App() {
     if (window.electronAPI && window.electronAPI.onWindowVisibilityChange) {
       window.electronAPI.onWindowVisibilityChange((isVisible) => {
         setIsWindowVisible(isVisible)
+        if (isVisible) {
+          setShowAutoHideNotice(false)
+        }
       })
     }
+  }, [])
+
+  useEffect(() => {
+    if (!window.electronAPI?.onAutoHideNotice) {
+      return
+    }
+    window.electronAPI.onAutoHideNotice((payload) => {
+      if (autoHideNoticeTimerRef.current !== null) {
+        window.clearTimeout(autoHideNoticeTimerRef.current)
+        autoHideNoticeTimerRef.current = null
+      }
+      setShowAutoHideNotice(true)
+      const durationMs = payload?.durationMs ?? 1400
+      autoHideNoticeTimerRef.current = window.setTimeout(() => {
+        setShowAutoHideNotice(false)
+        autoHideNoticeTimerRef.current = null
+      }, Math.max(600, durationMs + 600))
+    })
   }, [])
 
   // Load calibration and settings on startup
@@ -899,7 +944,74 @@ function App() {
       setAutoCalibrate(savedAutoCalibrate === 'true')
       appLog('info', `Loaded auto calibrate: ${savedAutoCalibrate}`)
     }
+
+    // Load blink sync setting
+    const savedBlinkSync = localStorage.getItem('blinkSyncEnabled')
+    if (savedBlinkSync !== null) {
+      setBlinkSyncEnabled(savedBlinkSync === 'true')
+      appLog('info', `Loaded blink sync: ${savedBlinkSync}`)
+    }
   }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    let timerId: number | null = null
+
+    const applyCommand = (command: ControlCommand) => {
+      if (command.type === 'calibrate') {
+        if (command.target === 'head') {
+          handleCalibrate()
+          appLog('info', 'Head calibration triggered via endpoint')
+        } else if (command.target === 'hand') {
+          handleHandCalibrate()
+          appLog('info', 'Hand calibration triggered via endpoint')
+        }
+        return
+      }
+
+      if (command.type === 'auto-calibrate') {
+        setAutoCalibrate(command.enabled)
+        localStorage.setItem('autoCalibrate', String(command.enabled))
+        appLog('info', `Auto calibrate set via endpoint: ${command.enabled}`)
+      }
+    }
+
+    const poll = async () => {
+      try {
+        const response = await fetch('http://localhost:3000/control-commands', { cache: 'no-store' })
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`)
+        }
+        const payload = await response.json()
+        if (Array.isArray(payload)) {
+          payload.forEach((command) => {
+            if (command && typeof command === 'object' && typeof command.type === 'string') {
+              applyCommand(command as ControlCommand)
+            }
+          })
+        }
+      } catch (err) {
+        const now = Date.now()
+        if (now - controlPollErrorRef.current > 10000) {
+          appLog('warn', 'Control endpoint unavailable:', err)
+          controlPollErrorRef.current = now
+        }
+      } finally {
+        if (!cancelled) {
+          timerId = window.setTimeout(poll, CONTROL_POLL_INTERVAL_MS)
+        }
+      }
+    }
+
+    poll()
+
+    return () => {
+      cancelled = true
+      if (timerId !== null) {
+        window.clearTimeout(timerId)
+      }
+    }
+  }, [handleCalibrate, handleHandCalibrate])
 
   // Camera setup
   useEffect(() => {
@@ -1038,6 +1150,57 @@ function App() {
         </div>
       )}
 
+      {showAutoHideNotice && (
+        <div style={{
+          position: 'absolute',
+          top: 0,
+          left: 0,
+          width: WIDTH,
+          height: HEIGHT,
+          backgroundColor: 'rgba(0, 0, 0, 0.6)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 1000,
+          pointerEvents: 'none'
+        }}>
+          <div style={{
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            gap: 12,
+            padding: '20px 28px',
+            background: 'rgba(20, 20, 26, 0.8)',
+            border: '1px solid rgba(255, 255, 255, 0.12)',
+            borderRadius: 16,
+            boxShadow: '0 12px 30px rgba(0, 0, 0, 0.45)',
+            color: '#fff',
+            textAlign: 'center'
+          }}>
+            <div style={{
+              width: 54,
+              height: 54,
+              borderRadius: 999,
+              background: 'rgba(120, 200, 160, 0.2)',
+              border: '2px solid rgba(160, 240, 200, 0.8)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center'
+            }}>
+              <svg width="30" height="22" viewBox="0 0 30 22" fill="none" aria-hidden="true">
+                <path d="M3 11.5L11 19L27 3" stroke="#E6FFF2" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </div>
+            <div style={{ fontSize: 16, fontWeight: 700, letterSpacing: 0.4 }}>
+              バックグラウンドでトラッキングを続けます
+            </div>
+            <div style={{ fontSize: 12, color: 'rgba(255, 255, 255, 0.75)' }}>
+              ウィンドウは閉じますが動作は継続します
+            </div>
+          </div>
+        </div>
+      )}
+
       <ControlPanel
         devices={devices}
         selectedDeviceId={selectedDeviceId}
@@ -1060,6 +1223,12 @@ function App() {
           setAutoCalibrate(enabled)
           localStorage.setItem('autoCalibrate', String(enabled))
           appLog('info', `Auto calibrate saved: ${enabled}`)
+        }}
+        blinkSyncEnabled={blinkSyncEnabled}
+        onBlinkSyncChange={(enabled) => {
+          setBlinkSyncEnabled(enabled)
+          localStorage.setItem('blinkSyncEnabled', String(enabled))
+          appLog('info', `Blink sync saved: ${enabled}`)
         }}
         setupStatus={setupStatus}
         resoniteUsername={resoniteUsername}
