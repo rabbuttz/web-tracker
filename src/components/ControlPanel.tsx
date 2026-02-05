@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React from 'react';
 
 interface ControlPanelProps {
 	devices: MediaDeviceInfo[];
@@ -22,6 +22,12 @@ interface ControlPanelProps {
 	onSetMode: (mode: 'visemeBlendshape' | 'blendshape') => void;
 	autoCalibrate: boolean;
 	onAutoCalibrateChange: (enabled: boolean) => void;
+	setupStatus: string;
+	resoniteUsername: string;
+	onResoniteUsernameChange: (name: string) => void;
+	resonitePort: number;
+	onResonitePortChange: (port: number) => void;
+	onSetupFacetrack: () => void;
 }
 
 export const ControlPanel: React.FC<ControlPanelProps> = ({
@@ -38,6 +44,12 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
 	onSetMode,
 	autoCalibrate,
 	onAutoCalibrateChange,
+	setupStatus,
+	resoniteUsername,
+	onResoniteUsernameChange,
+	resonitePort,
+	onResonitePortChange,
+	onSetupFacetrack,
 }) => {
 	return (
 		<div className="controls-panel">
@@ -61,6 +73,28 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
 				<button className="glass-button" onClick={onCalibrate}>
 					Head Calibrate
 				</button>
+			</div>
+
+			<div className="control-group setup-section">
+				<label>Automated Setup (Resonite)</label>
+				<input
+					type="text"
+					placeholder="Resonite Username"
+					value={resoniteUsername}
+					onChange={(e) => onResoniteUsernameChange(e.target.value)}
+					className="glass-input"
+				/>
+				<input
+					type="number"
+					placeholder="Port (Default 10534)"
+					value={resonitePort}
+					onChange={(e) => onResonitePortChange(Number(e.target.value))}
+					className="glass-input"
+				/>
+				<button className="glass-button setup-button" onClick={onSetupFacetrack}>
+					Run Automated Setup
+				</button>
+				{setupStatus && <div className="status-text">{setupStatus}</div>}
 			</div>
 
 			<div className="control-group">

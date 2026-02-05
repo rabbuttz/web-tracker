@@ -1,8 +1,87 @@
 const { app, BrowserWindow, ipcMain, Tray, Menu, Notification } = require('electron');
 const path = require('path');
+const fs = require('fs');
 const osc = require('node-osc');
 const { spawn, exec } = require('child_process');
 const AutoLaunch = require('auto-launch');
+
+// Logging setup (local time)
+const LOG_DIR = app.getPath('logs');
+let logStream = null;
+
+const originalConsole = {
+    log: console.log.bind(console),
+    info: console.info.bind(console),
+    warn: console.warn.bind(console),
+    error: console.error.bind(console),
+};
+
+function formatLocalDate(date) {
+    const pad = (n, len = 2) => String(n).padStart(len, '0');
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+function formatLocalTimestamp(date) {
+    const pad = (n, len = 2) => String(n).padStart(len, '0');
+    const year = date.getFullYear();
+    const month = pad(date.getMonth() + 1);
+    const day = pad(date.getDate());
+    const hours = pad(date.getHours());
+    const minutes = pad(date.getMinutes());
+    const seconds = pad(date.getSeconds());
+    const ms = pad(date.getMilliseconds(), 3);
+    const offsetMinutes = -date.getTimezoneOffset();
+    const sign = offsetMinutes >= 0 ? '+' : '-';
+    const absOffset = Math.abs(offsetMinutes);
+    const offsetHours = pad(Math.floor(absOffset / 60));
+    const offsetMins = pad(absOffset % 60);
+    return `${year}-${month}-${day}T${hours}:${minutes}:${seconds}.${ms}${sign}${offsetHours}:${offsetMins}`;
+}
+
+function initLogging() {
+    try {
+        if (!fs.existsSync(LOG_DIR)) {
+            fs.mkdirSync(LOG_DIR, { recursive: true });
+        }
+        const today = formatLocalDate(new Date());
+        const logFilePath = path.join(LOG_DIR, `app-${today}.log`);
+        logStream = fs.createWriteStream(logFilePath, { flags: 'a' });
+        log('info', '=== Application Starting ===');
+        log('info', `Log file: ${logFilePath}`);
+    } catch (err) {
+        originalConsole.error('[Electron] Failed to initialize logging:', err);
+    }
+}
+
+function log(level, ...args) {
+    const timestamp = formatLocalTimestamp(new Date());
+    const message = args.map(arg => {
+        if (typeof arg === 'object') {
+            try {
+                return JSON.stringify(arg);
+            } catch {
+                return String(arg);
+            }
+        }
+        return String(arg);
+    }).join(' ');
+
+    const logLine = `[${timestamp}] [${level.toUpperCase()}] ${message}\n`;
+
+    const consoleFn = originalConsole[level] || originalConsole.log;
+    consoleFn(...args);
+
+    if (logStream) {
+        logStream.write(logLine);
+    }
+}
+
+console.log = (...args) => log('log', ...args);
+console.info = (...args) => log('info', ...args);
+console.warn = (...args) => log('warn', ...args);
+console.error = (...args) => log('error', ...args);
+
+initLogging();
 
 const oscClient = new osc.Client('127.0.0.1', 9000);
 let serverProcess = null;
@@ -455,13 +534,28 @@ function startServer() {
     const isDev = process.env.NODE_ENV === 'development';
 
     if (!isDev) {
-        // In production, start server.js
-        const serverPath = path.join(__dirname, 'server.js');
+        // In production, start server.mjs from unpacked directory if available
+        let serverPath = path.join(__dirname, 'server.mjs');
+        if (serverPath.includes('app.asar')) {
+            const unpackedPath = serverPath.replace('app.asar', 'app.asar.unpacked');
+            if (fs.existsSync(unpackedPath)) {
+                serverPath = unpackedPath;
+            }
+        }
         console.log('[Electron] Starting server at:', serverPath);
 
-        serverProcess = spawn('node', [serverPath], {
-            stdio: 'inherit',
-            shell: true
+        serverProcess = spawn(process.execPath, [serverPath], {
+            stdio: ['ignore', 'pipe', 'pipe'],  // stdin: ignore, stdout: pipe, stderr: pipe
+            shell: false,
+            env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }
+        });
+
+        serverProcess.stdout.on('data', (data) => {
+            console.log('[Server][stdout]', data.toString().trim());
+        });
+
+        serverProcess.stderr.on('data', (data) => {
+            console.error('[Server][stderr]', data.toString().trim());
         });
 
         serverProcess.on('error', (err) => {
@@ -569,6 +663,11 @@ app.on('will-quit', () => {
 
     if (serverProcess) {
         killServerProcess();
+    }
+
+    if (logStream) {
+        logStream.end();
+        logStream = null;
     }
 });
 

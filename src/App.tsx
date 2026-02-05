@@ -33,7 +33,23 @@ interface EyeCalibration {
   closedLeft: number;
   closedRight: number;
   frameCount: number;
+  leftBlink: BlinkHistory;
+  rightBlink: BlinkHistory;
 }
+
+interface BlinkHistory {
+  inBlink: boolean;
+  minSinceBlink: number;
+  openSamples: number[];
+}
+
+const BLINK_HISTORY_SIZE = 5;
+
+const createBlinkHistory = (): BlinkHistory => ({
+  inBlink: false,
+  minSinceBlink: Number.POSITIVE_INFINITY,
+  openSamples: []
+});
 
 declare global {
   interface Window {
@@ -62,6 +78,9 @@ function App() {
   const [expressionMode, setExpressionMode] = useState<'visemeBlendshape' | 'blendshape'>('visemeBlendshape')
   const [autoCalibrate, setAutoCalibrate] = useState<boolean>(true)
   const [isWindowVisible, setIsWindowVisible] = useState<boolean>(true)
+  const [setupStatus, setSetupStatus] = useState<string>('')
+  const [resoniteUsername, setResoniteUsername] = useState<string>(localStorage.getItem('resoniteUsername') || '')
+  const [resonitePort, setResonitePort] = useState<number>(Number(localStorage.getItem('resonitePort')) || 10534)
   const [mouthDebug, setMouthDebug] = useState<{
     nHeight: number;
     nWidth: number;
@@ -104,7 +123,9 @@ function App() {
     openRight: 1.0,
     closedLeft: 0.0,
     closedRight: 0.0,
-    frameCount: 0
+    frameCount: 0,
+    leftBlink: createBlinkHistory(),
+    rightBlink: createBlinkHistory()
   })
 
   const detectedBlendshapeNamesRef = useRef<Set<string>>(new Set())
@@ -132,17 +153,6 @@ function App() {
   const threeStateRef = useThreeManager(threeCanvasRef.current)
 
   const formatVec = (v: number[]) => `[${v.map(n => n.toFixed(4)).join(';')}]`
-
-  // Extract pitch (X-axis rotation) from quaternion
-  const extractPitchQuaternion = (q: quat): quat => {
-    // Convert quaternion to euler angles
-    const sinp = 2 * (q[3] * q[0] - q[2] * q[1])
-    const pitch = Math.abs(sinp) >= 1 ? Math.sign(sinp) * Math.PI / 2 : Math.asin(sinp)
-
-    // Create quaternion with only pitch (X-axis rotation)
-    const halfPitch = pitch / 2
-    return quat.fromValues(Math.sin(halfPitch), 0, 0, Math.cos(halfPitch))
-  }
 
   const calculateHandSize = (landmarks: { x: number; y: number; z: number }[]) => {
     const wrist = landmarks[HAND_LM.WRIST]
@@ -195,20 +205,24 @@ function App() {
     }
   }, [])
 
-  const handleSetupArkit = useCallback(async (username: string, port: number) => {
-    setSetupStatus('Setting up ARKit...');
-    try {
-      const response = await fetch(`http://localhost:3000/setup-arkit?username=${encodeURIComponent(username)}&port=${port}`);
-      const data = await response.json();
-      if (data.success) {
-        setSetupStatus(`Success: Created ${data.createdCount}, Updated ${data.updatedCount}`);
-      } else {
-        setSetupStatus(`Error: ${data.error || 'Failed'}`);
-      }
-    } catch (error) {
-      setSetupStatus(`Error: ${error instanceof Error ? error.message : String(error)}`);
+
+  const handleSetupFacetrack = useCallback(async () => {
+    if (!resoniteUsername) {
+      setSetupStatus('Error: Username required');
+      return;
     }
-  }, [])
+    setSetupStatus('Setting up FaceTrack...');
+    try {
+      const response = await fetch(`http://localhost:3000/setup-facetrack?username=${encodeURIComponent(resoniteUsername)}&port=${resonitePort}`);
+      const text = await response.text();
+      setSetupStatus(text);
+      appLog('info', `Setup result: ${text}`);
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      setSetupStatus(`Error: ${msg}`);
+      appLog('error', `Setup failed: ${msg}`);
+    }
+  }, [resoniteUsername, resonitePort]);
 
   const handleSetMode = useCallback((mode: 'visemeBlendshape' | 'blendshape') => {
     setExpressionMode(mode)
@@ -551,38 +565,85 @@ function App() {
       }
 
       // Auto-calibrating blink normalization
-      // Automatically tracks min (open) and max (closed) values over time
+      // Track open values from the last few blinks to stabilize "fully open"
       const normalizeBlinkValue = (rawValue: number, side: 'left' | 'right') => {
         const calib = eyeCalibrationRef.current
 
         // Update calibration with current observation
         calib.frameCount++
 
-        if (side === 'left') {
-          // Track minimum (open eyes) - update if we see a lower value
-          if (rawValue < calib.openLeft) {
-            calib.openLeft = rawValue
+        const isLeft = side === 'left'
+        if (!calib.leftBlink) {
+          calib.leftBlink = createBlinkHistory()
+        }
+        if (!calib.rightBlink) {
+          calib.rightBlink = createBlinkHistory()
+        }
+        const blink = isLeft ? calib.leftBlink : calib.rightBlink
+        const getOpen = () => (isLeft ? calib.openLeft : calib.openRight)
+        const getClosed = () => (isLeft ? calib.closedLeft : calib.closedRight)
+        const setOpen = (value: number) => {
+          if (isLeft) {
+            calib.openLeft = value
+          } else {
+            calib.openRight = value
           }
-          // Track maximum (closed eyes) - update if we see a higher value
-          if (rawValue > calib.closedLeft) {
-            calib.closedLeft = rawValue
+        }
+        const setClosed = (value: number) => {
+          if (isLeft) {
+            calib.closedLeft = value
+          } else {
+            calib.closedRight = value
+          }
+        }
+
+        // Track maximum (closed eyes) - update if we see a higher value
+        if (rawValue > getClosed()) {
+          setClosed(rawValue)
+        }
+
+        const openBase = getOpen()
+        const closedBase = getClosed()
+        const baseRange = closedBase - openBase
+        const hasRange = baseRange > 0.05
+        const closeThreshold = hasRange ? openBase + baseRange * 0.6 : 0.4
+        const openThreshold = hasRange ? openBase + baseRange * 0.3 : 0.2
+
+        if (!blink.inBlink) {
+          if (!Number.isFinite(blink.minSinceBlink)) {
+            blink.minSinceBlink = rawValue
+          } else if (rawValue < blink.minSinceBlink) {
+            blink.minSinceBlink = rawValue
           }
 
-          // Slowly drift minimum upward to adapt to lighting changes (every ~10 seconds at 30fps)
-          if (calib.frameCount % 300 === 0 && calib.openLeft < calib.closedLeft * 0.5) {
-            calib.openLeft = calib.openLeft * 0.95 + calib.closedLeft * 0.05 * 0.3
+          if (rawValue >= closeThreshold) {
+            if (Number.isFinite(blink.minSinceBlink)) {
+              blink.openSamples.push(blink.minSinceBlink)
+              if (blink.openSamples.length > BLINK_HISTORY_SIZE) {
+                blink.openSamples.shift()
+              }
+            }
+            blink.inBlink = true
           }
-        } else {
-          if (rawValue < calib.openRight) {
-            calib.openRight = rawValue
-          }
-          if (rawValue > calib.closedRight) {
-            calib.closedRight = rawValue
-          }
+        } else if (rawValue <= openThreshold) {
+          blink.inBlink = false
+          blink.minSinceBlink = rawValue
+        }
 
-          if (calib.frameCount % 300 === 0 && calib.openRight < calib.closedRight * 0.5) {
-            calib.openRight = calib.openRight * 0.95 + calib.closedRight * 0.05 * 0.3
+        if (blink.openSamples.length > 0) {
+          const sum = blink.openSamples.reduce((acc, value) => acc + value, 0)
+          let avgOpen = sum / blink.openSamples.length
+          if (getClosed() > 0.05) {
+            avgOpen = Math.min(avgOpen, getClosed() - 0.02)
           }
+          setOpen(avgOpen)
+        } else if (rawValue < getOpen()) {
+          setOpen(rawValue)
+        }
+
+        // Slowly drift minimum upward to adapt to lighting changes (every ~10 seconds at 30fps)
+        if (calib.frameCount % 300 === 0 && blink.openSamples.length === 0 && getOpen() < getClosed() * 0.5) {
+          setOpen(getOpen() * 0.95 + getClosed() * 0.05 * 0.3)
         }
 
         // Ignore extreme noise for output (clamping)
@@ -590,8 +651,8 @@ function App() {
           return 0
         }
 
-        const openVal = side === 'left' ? calib.openLeft : calib.openRight
-        const closedVal = side === 'left' ? calib.closedLeft : calib.closedRight
+        const openVal = getOpen()
+        const closedVal = getClosed()
 
         // Calculate range - use 75% of observed max as "fully closed" threshold
         // This makes it easier to fully close eyes without requiring extreme values
@@ -610,15 +671,6 @@ function App() {
 
       if (expressionModeRef.current === 'blendshape') {
         // Perfect Sync Mode: Calculate aiueo from blendshapes and send to legacy paths
-        const jawOpen = getBlendshapeValue('jawOpen')
-        const mouthPucker = getBlendshapeValue('mouthPucker')
-        const mouthFunnel = getBlendshapeValue('mouthFunnel')
-        const mouthSmileLeft = getBlendshapeValue('mouthSmileLeft')
-        const mouthSmileRight = getBlendshapeValue('mouthSmileRight')
-        const mouthStretchLeft = getBlendshapeValue('mouthStretchLeft')
-        const mouthStretchRight = getBlendshapeValue('mouthStretchRight')
-        const mouthLowerDown = getBlendshapeValue('mouthLowerDownLeft') + getBlendshapeValue('mouthLowerDownRight')
-        const mouthUpperUp = getBlendshapeValue('mouthUpperUpLeft') + getBlendshapeValue('mouthUpperUpRight')
         // ここはまだ実装途中 by tatsuさん なので、今は一旦コメントアウトしてるだけなので指示があるまでは勝手に消さないで
         // const mouthDimpleLeft = getBlendshapeValue('mouthDimpleLeft')
         // const mouthDimpleRight = getBlendshapeValue('mouthDimpleRight')
@@ -1009,6 +1061,18 @@ function App() {
           localStorage.setItem('autoCalibrate', String(enabled))
           appLog('info', `Auto calibrate saved: ${enabled}`)
         }}
+        setupStatus={setupStatus}
+        resoniteUsername={resoniteUsername}
+        onResoniteUsernameChange={(name) => {
+          setResoniteUsername(name);
+          localStorage.setItem('resoniteUsername', name);
+        }}
+        resonitePort={resonitePort}
+        onResonitePortChange={(port) => {
+          setResonitePort(port);
+          localStorage.setItem('resonitePort', String(port));
+        }}
+        onSetupFacetrack={handleSetupFacetrack}
       />
     </div>
   )

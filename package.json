@@ -10,7 +10,7 @@
   "scripts": {
     "dev": "vite --port 5173 --strictPort",
     "electron:dev": "cross-env NODE_ENV=development electron .",
-    "start": "concurrently -k \"node server.js\" \"npm run dev\" \"wait-on http://localhost:5173 && npm run electron:dev\"",
+    "start": "concurrently -k \"node server.mjs\" \"npm run dev\" \"wait-on http://localhost:5173 && npm run electron:dev\"",
     "build": "tsc -b && vite build",
     "electron:build": "npm run build && electron-builder",
     "electron:build:win": "npm run build && electron-builder --win",
@@ -63,9 +63,16 @@
     },
     "files": [
       "dist/**/*",
+      "build/**/*",
       "electron-main.cjs",
       "preload.js",
-      "server.js",
+      "server.mjs",
+      "arkit-setup.mjs",
+      "node_modules/**/*"
+    ],
+    "asarUnpack": [
+      "server.mjs",
+      "arkit-setup.mjs",
       "node_modules/**/*"
     ],
     "win": {

@@ -1,7 +1,7 @@
 import express from 'express';
 import WebSocket from 'ws';
 import { v4 as uuidv4 } from 'uuid';
-import { createArkitSetup } from './arkit-setup.js';
+import { createArkitSetup } from './arkit-setup.mjs';
 
 const WEB_PORT = 3000;
 const DEFAULT_RESONITE_PORT = 10534;
@@ -337,19 +337,45 @@ async function setupMouthShapeKeys(client, avatarSlot, faceTrackSlot) {
         'ou': 'ou_shape'
     };
 
-    // Phase 0: Save shape key field IDs from DirectVisemeDriver BEFORE redirecting
-    console.log('[Mouth Setup] Phase 0: Saving shape key field IDs from DirectVisemeDriver...');
+    // Phase 0: Save shape key field IDs
+    console.log('[Mouth Setup] Phase 0: Saving shape key field IDs...');
     const savedShapeKeyFieldIds = {};
-    for (const [visemeField, mouthVarName] of Object.entries(visemeToMouthMapping)) {
-        const visemeMember = visemeMembers[visemeField];
-        if (visemeMember?.targetId) {
-            savedShapeKeyFieldIds[visemeField] = visemeMember.targetId;
-            console.log(`[Mouth Setup] Saved ${visemeField} -> ${visemeMember.targetId}`);
-        } else {
-            console.log(`[Mouth Setup] WARNING: No targetId found for ${visemeField}`);
+
+    // First try to get them from SkinnedMeshRenderer if we found it
+    if (skinnedMeshRenderer && skinnedMeshRenderer.members) {
+        console.log('[Mouth Setup] Attempting to get shape keys from SkinnedMeshRenderer...');
+        for (const [visemeField, mouthVarName] of Object.entries(visemeToMouthMapping)) {
+            // Look for a member that matches the viseme name (case-insensitive)
+            const smrMemberKey = Object.keys(skinnedMeshRenderer.members).find(k =>
+                k.toLowerCase() === visemeField.toLowerCase() ||
+                k.toLowerCase() === `blendshape.${visemeField.toLowerCase()}` ||
+                k.toLowerCase() === `_blendshape.${visemeField.toLowerCase()}`
+            );
+
+            if (smrMemberKey) {
+                savedShapeKeyFieldIds[visemeField] = skinnedMeshRenderer.members[smrMemberKey].id;
+                console.log(`[Mouth Setup] Found ${visemeField} in SMR: ${smrMemberKey} -> ${savedShapeKeyFieldIds[visemeField]}`);
+            }
         }
     }
-    console.log(`[Mouth Setup] Saved shape keys: ${JSON.stringify(savedShapeKeyFieldIds)}`);
+
+    // Fallback/supplement from DirectVisemeDriver if missing
+    for (const [visemeField, mouthVarName] of Object.entries(visemeToMouthMapping)) {
+        if (savedShapeKeyFieldIds[visemeField]) continue;
+
+        const visemeMember = visemeMembers[visemeField];
+        if (visemeMember?.targetId) {
+            // If it's already a dummy, don't use it!
+            const isDummy = visemeMember.targetType?.includes('DynamicValueVariable');
+            if (isDummy) {
+                console.log(`[Mouth Setup] Skipping ${visemeField} from VisemeDriver as it already points to a dummy.`);
+                continue;
+            }
+            savedShapeKeyFieldIds[visemeField] = visemeMember.targetId;
+            console.log(`[Mouth Setup] Saved ${visemeField} from VisemeDriver target -> ${visemeMember.targetId}`);
+        }
+    }
+    console.log(`[Mouth Setup] Final saved shape keys: ${JSON.stringify(savedShapeKeyFieldIds)}`);
 
     // Phase 1: Find dummy variables
     console.log('[Mouth Setup] Phase 1: Finding dummy variables...');

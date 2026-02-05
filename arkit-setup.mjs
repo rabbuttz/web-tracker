@@ -732,6 +732,7 @@ export function createArkitSetup({
         // Find Eye Manager and setup eye tracking
         console.log('[ARKit Setup] Searching for Eye Manager...');
         let eyeLinearDriverOpenStateIds = { Left: null, Right: null };
+        let eyeCloseOverrideIds = { Left: null, Right: null };
         let eyeManagerSetupResult = '';
         
         const findAndSetupEyeManager = async (avatarSlotData) => {
@@ -780,6 +781,17 @@ export function createArkitSetup({
                     }
                 } catch (err) {
                     console.error('[ARKit Setup] Error updating EyeManager:', err.message);
+                }
+
+                const leftOverrideKey = getMemberKey(eyeManagerComp.members, 'lefteyecloseoverride', 'LeftEyeCloseOverride');
+                const rightOverrideKey = getMemberKey(eyeManagerComp.members, 'righteyecloseoverride', 'RightEyeCloseOverride');
+                const leftOverrideMember = leftOverrideKey ? eyeManagerComp.members?.[leftOverrideKey] : null;
+                const rightOverrideMember = rightOverrideKey ? eyeManagerComp.members?.[rightOverrideKey] : null;
+                eyeCloseOverrideIds.Left = leftOverrideMember?.id || leftOverrideMember?.Id || null;
+                eyeCloseOverrideIds.Right = rightOverrideMember?.id || rightOverrideMember?.Id || null;
+
+                if (eyeCloseOverrideIds.Left || eyeCloseOverrideIds.Right) {
+                    console.log(`[ARKit Setup] EyeCloseOverride IDs: L=${eyeCloseOverrideIds.Left || 'null'} R=${eyeCloseOverrideIds.Right || 'null'}`);
                 }
             }
             
@@ -900,12 +912,12 @@ export function createArkitSetup({
             // Eye ManagerとEyeLinearDriverを探して設定
             console.log('[ARKit Setup] Setting up Eye Manager...');
             await findAndSetupEyeManager(avatarDeepResponse.data);
-            if (eyeLinearDriverOpenStateIds.Left) {
-                console.log(`[ARKit Setup] Found Left eye OpenState: ${eyeLinearDriverOpenStateIds.Left}`);
-            }
-            if (eyeLinearDriverOpenStateIds.Right) {
-                console.log(`[ARKit Setup] Found Right eye OpenState: ${eyeLinearDriverOpenStateIds.Right}`);
-            }
+        if (eyeLinearDriverOpenStateIds.Left) {
+            console.log(`[ARKit Setup] Found Left eye OpenState: ${eyeLinearDriverOpenStateIds.Left}`);
+        }
+        if (eyeLinearDriverOpenStateIds.Right) {
+            console.log(`[ARKit Setup] Found Right eye OpenState: ${eyeLinearDriverOpenStateIds.Right}`);
+        }
         }
 
         const smrPick = await pickSkinnedMeshRenderer(client, avatarSlot);
@@ -971,25 +983,25 @@ export function createArkitSetup({
         console.log(`[ARKit Setup] Found ${foundShapes.length} blendshapes in SMR`);
         
         // EyeClosedRight/LeftはEyeLinearDriver経由で直接処理するため、foundShapesに追加
-        if (eyeLinearDriverOpenStateIds.Right && !foundShapes.includes('EyeClosedRight')) {
+        if ((eyeCloseOverrideIds.Right || eyeLinearDriverOpenStateIds.Right) && !foundShapes.includes('EyeClosedRight')) {
             foundShapes = [...foundShapes, 'EyeClosedRight'];
-            console.log('[ARKit Setup] Added EyeClosedRight to process (EyeLinearDriver)');
+            console.log('[ARKit Setup] Added EyeClosedRight to process (EyeCloseOverride/OpenState)');
         }
-        if (eyeLinearDriverOpenStateIds.Left && !foundShapes.includes('EyeClosedLeft')) {
+        if ((eyeCloseOverrideIds.Left || eyeLinearDriverOpenStateIds.Left) && !foundShapes.includes('EyeClosedLeft')) {
             foundShapes = [...foundShapes, 'EyeClosedLeft'];
-            console.log('[ARKit Setup] Added EyeClosedLeft to process (EyeLinearDriver)');
+            console.log('[ARKit Setup] Added EyeClosedLeft to process (EyeCloseOverride/OpenState)');
         }
 
         for (const shapeName of foundShapes) {
             let fieldId = resolvedMap[shapeName];
             
             // EyeClosedRight/Leftの場合、EyeLinearDriverのOpenStateを使用
-            if (shapeName === 'EyeClosedRight' && eyeLinearDriverOpenStateIds.Right) {
-                console.log(`[ARKit Setup] ${shapeName}: Using EyeLinearDriver OpenState instead of blendshape`);
-                fieldId = eyeLinearDriverOpenStateIds.Right;
-            } else if (shapeName === 'EyeClosedLeft' && eyeLinearDriverOpenStateIds.Left) {
-                console.log(`[ARKit Setup] ${shapeName}: Using EyeLinearDriver OpenState instead of blendshape`);
-                fieldId = eyeLinearDriverOpenStateIds.Left;
+            if (shapeName === 'EyeClosedRight' && (eyeCloseOverrideIds.Right || eyeLinearDriverOpenStateIds.Right)) {
+                fieldId = eyeCloseOverrideIds.Right || eyeLinearDriverOpenStateIds.Right;
+                console.log(`[ARKit Setup] ${shapeName}: Using EyeCloseOverride/OpenState instead of blendshape`);
+            } else if (shapeName === 'EyeClosedLeft' && (eyeCloseOverrideIds.Left || eyeLinearDriverOpenStateIds.Left)) {
+                fieldId = eyeCloseOverrideIds.Left || eyeLinearDriverOpenStateIds.Left;
+                console.log(`[ARKit Setup] ${shapeName}: Using EyeCloseOverride/OpenState instead of blendshape`);
             }
 
             const oscPath = buildOscPath(basePath, shapeName);
