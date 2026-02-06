@@ -546,10 +546,6 @@ async function resolveBlendShapeFields(client, faceSlotId, smrId, shapeNames, na
             // If _drive is null, it means BlendShapeName wasn't matched yet
             const fieldId = driveTargetId;
 
-            if (!fieldId && resolvedName) {
-                console.warn(`[ARKit Setup] _drive not linked for "${resolvedName}" - BlendShapeName may not match SMR`);
-            }
-
             // 見つかった名前をそのまま使う（aliasMapによる変換はしない）
             const foundName = resolvedName || shapeNames[index] || null;
 
@@ -631,6 +627,58 @@ export function createArkitSetup({
     getIsSettingUp,
     setIsSettingUp
 }) {
+    const buildUserLabel = (username, userSlotId) => {
+        if (username) return username;
+        if (userSlotId) return `id:${userSlotId}`;
+        return 'unknown';
+    };
+
+    const findUserSlotByName = (slot, username) => {
+        if (!slot) return null;
+        const slotName = getSlotName(slot);
+        if (slotName && slotName.startsWith('User') && slotName.includes(username)) {
+            return slot;
+        }
+        if (slot.children) {
+            for (const child of slot.children) {
+                const result = findUserSlotByName(child, username);
+                if (result) return result;
+            }
+        }
+        return null;
+    };
+
+    const resolveUserSlot = async (client, { username, userSlotId }) => {
+        if (userSlotId) {
+            const userSlotResponse = await client.getSlot(userSlotId, 0, false);
+            if (!userSlotResponse.success || !userSlotResponse.data) {
+                throw new Error(`Failed to get user slot by id "${userSlotId}".`);
+            }
+            return userSlotResponse.data;
+        }
+
+        if (!username) {
+            throw new Error('Username parameter required');
+        }
+
+        let rootResponse = await client.getSlot('Root', 1, false);
+        if (!rootResponse.success) throw new Error('Failed to get root slot');
+
+        let userSlot = findUserSlotByName(rootResponse.data, username);
+        if (!userSlot) {
+            rootResponse = await client.getSlot('Root', 3, false);
+            if (rootResponse.success) {
+                userSlot = findUserSlotByName(rootResponse.data, username);
+            }
+        }
+
+        if (!userSlot) {
+            throw new Error(`User "${username}" not found.`);
+        }
+
+        return userSlot;
+    };
+
     const ensureConnected = async (port) => {
         const targetPort = port || defaultResonitePort;
         let client = getResoniteClient();
@@ -650,14 +698,15 @@ export function createArkitSetup({
 
     const runArkitSetup = async ({
         username,
+        userSlotId,
         port = defaultResonitePort,
         limit = ALL_BLENDSHAPE_NAMES.length,
         debugSelf = false,
         noType = false,
         batch = 999
     }) => {
-        if (!username) {
-            throw new Error('Username parameter required');
+        if (!username && !userSlotId) {
+            throw new Error('Username or userSlotId parameter required');
         }
 
         // 全ブレンドシェイプ名（ARKit + Unified）を探索対象にする
@@ -665,37 +714,12 @@ export function createArkitSetup({
         const shapeList = ALL_BLENDSHAPE_NAMES.slice(0, shapeLimit);
         const batchSize = Math.max(1, Math.min(parseInt(batch, 10), shapeList.length));
 
-        console.log(`[ARKit Setup] Starting setup for user: ${username} (port: ${port})`);
+        const userLabel = buildUserLabel(username, userSlotId);
+        console.log(`[ARKit Setup] Starting setup for user: ${userLabel} (port: ${port})`);
 
         const client = await ensureConnected(port);
 
-        let rootResponse = await client.getSlot('Root', 1, false);
-        if (!rootResponse.success) throw new Error('Failed to get root slot');
-
-        const findUserSlot = (slot) => {
-            if (!slot) return null;
-            const slotName = getSlotName(slot);
-            if (slotName && slotName.includes(username)) return slot;
-            if (slot.children) {
-                for (const child of slot.children) {
-                    const result = findUserSlot(child);
-                    if (result) return result;
-                }
-            }
-            return null;
-        };
-
-        let userSlot = findUserSlot(rootResponse.data);
-        if (!userSlot) {
-            rootResponse = await client.getSlot('Root', 3, false);
-            if (rootResponse.success) {
-                userSlot = findUserSlot(rootResponse.data);
-            }
-        }
-
-        if (!userSlot) {
-            throw new Error(`User "${username}" not found.`);
-        }
+        const userSlot = await resolveUserSlot(client, { username, userSlotId });
 
         console.log(`[ARKit Setup] Found user slot: ${getSlotName(userSlot)} (${userSlot.id})`);
         const userDeepResponse = await client.getSlot(userSlot.id, 10, false);
@@ -715,7 +739,7 @@ export function createArkitSetup({
 
         const faceTrackSlot = findFaceTrackSlot(userDeepResponse.data);
         if (!faceTrackSlot) {
-            throw new Error(`FaceTrack_ver slot not found under user "${username}".`);
+            throw new Error(`FaceTrack_ver slot not found under user "${userLabel}".`);
         }
 
         const faceTrackDetail = await client.getSlot(faceTrackSlot.id, 2, true);
@@ -731,7 +755,6 @@ export function createArkitSetup({
 
         // Find Eye Manager and setup eye tracking
         console.log('[ARKit Setup] Searching for Eye Manager...');
-        let eyeLinearDriverOpenStateIds = { Left: null, Right: null };
         let eyeCloseOverrideIds = { Left: null, Right: null };
         let eyeManagerSetupResult = '';
         
@@ -756,12 +779,15 @@ export function createArkitSetup({
                 console.log('[ARKit Setup] Eye Manager slot not found');
                 return null;
             }
+            console.log(`[ARKit Setup] Eye Manager slot found: name="${getSlotName(eyeManagerSlot)}" id=${eyeManagerSlot.id}`);
             
             const eyeManagerDetail = await client.getSlot(eyeManagerSlot.id, 0, true);
             if (!eyeManagerDetail.success || !eyeManagerDetail.data.components) {
                 console.log('[ARKit Setup] Failed to get Eye Manager components');
                 return null;
             }
+            const componentTypes = eyeManagerDetail.data.components.map(c => c.type || c.componentType || 'Unknown');
+            console.log(`[ARKit Setup] Eye Manager components (${componentTypes.length}): ${componentTypes.join(', ')}`);
             
             // Setup 1: Disable auto-blink in EyeManager
             const eyeManagerComp = eyeManagerDetail.data.components.find(c => {
@@ -771,6 +797,7 @@ export function createArkitSetup({
             
             if (eyeManagerComp) {
                 try {
+                    console.log('[ARKit Setup] EyeManager: disabling auto-blink (Min/MaxBlinkInterval -> Infinity)');
                     const updateResult = await client.updateComponent(eyeManagerComp.id, {
                         MinBlinkInterval: { $type: 'float', value: 'Infinity' },
                         MaxBlinkInterval: { $type: 'float', value: 'Infinity' }
@@ -778,13 +805,21 @@ export function createArkitSetup({
                     if (updateResult.success) {
                         eyeManagerSetupResult = ' EyeManager: Auto-blink disabled.';
                         console.log('[ARKit Setup] EyeManager: Min/MaxBlinkInterval set to Infinity');
+                    } else {
+                        console.warn(`[ARKit Setup] EyeManager: update failed (${updateResult.errorInfo || 'unknown error'})`);
                     }
                 } catch (err) {
                     console.error('[ARKit Setup] Error updating EyeManager:', err.message);
                 }
 
+                console.log(`[ARKit Setup] EyeManager component id=${eyeManagerComp.id}`);
+                const memberKeys = Object.keys(eyeManagerComp.members || {});
+                if (memberKeys.length > 0) {
+                    console.log(`[ARKit Setup] EyeManager member keys: ${memberKeys.join(', ')}`);
+                }
                 const leftOverrideKey = getMemberKey(eyeManagerComp.members, 'lefteyecloseoverride', 'LeftEyeCloseOverride');
                 const rightOverrideKey = getMemberKey(eyeManagerComp.members, 'righteyecloseoverride', 'RightEyeCloseOverride');
+                console.log(`[ARKit Setup] EyeCloseOverride keys: L=${leftOverrideKey || 'null'} R=${rightOverrideKey || 'null'}`);
                 const leftOverrideMember = leftOverrideKey ? eyeManagerComp.members?.[leftOverrideKey] : null;
                 const rightOverrideMember = rightOverrideKey ? eyeManagerComp.members?.[rightOverrideKey] : null;
                 eyeCloseOverrideIds.Left = leftOverrideMember?.id || leftOverrideMember?.Id || null;
@@ -792,49 +827,14 @@ export function createArkitSetup({
 
                 if (eyeCloseOverrideIds.Left || eyeCloseOverrideIds.Right) {
                     console.log(`[ARKit Setup] EyeCloseOverride IDs: L=${eyeCloseOverrideIds.Left || 'null'} R=${eyeCloseOverrideIds.Right || 'null'}`);
+                } else {
+                    console.log('[ARKit Setup] EyeCloseOverride IDs not found');
                 }
+            } else {
+                console.log('[ARKit Setup] EyeManager component not found in Eye Manager slot');
             }
             
-            // Setup 2: Find EyeLinearDriver for EyeClosed shapes
-            const eyeLinearDriver = eyeManagerDetail.data.components.find(c => {
-                const type = c.type || c.componentType || '';
-                return type.includes('EyeLinearDriver');
-            });
-            
-            if (!eyeLinearDriver) {
-                console.log('[ARKit Setup] EyeLinearDriver not found');
-                return null;
-            }
-            
-            // Get EyeLinearDriver details to find OpenState IDs
-            const driverDetail = await client.getComponent(eyeLinearDriver.id);
-            if (!driverDetail.success) return null;
-            
-            const eyes = driverDetail.data.members?.Eyes;
-            if (!eyes || !eyes.elements) return null;
-            
-            // Find first Left and Right eye OpenState IDs
-            let leftFound = false;
-            let rightFound = false;
-            
-            for (const eye of eyes.elements) {
-                const side = eye.members?.Side?.value;
-                const openStateId = eye.members?.OpenState?.id;
-                
-                if (side === 'Left' && openStateId && !leftFound) {
-                    eyeLinearDriverOpenStateIds.Left = openStateId;
-                    leftFound = true;
-                    console.log(`[ARKit Setup] Found Left eye OpenState: ${openStateId}`);
-                } else if (side === 'Right' && openStateId && !rightFound) {
-                    eyeLinearDriverOpenStateIds.Right = openStateId;
-                    rightFound = true;
-                    console.log(`[ARKit Setup] Found Right eye OpenState: ${openStateId}`);
-                }
-                
-                if (leftFound && rightFound) break;
-            }
-            
-            return eyeLinearDriverOpenStateIds;
+            return eyeCloseOverrideIds;
         };
 
         const templateComponents = faceDetail.data.components || [];
@@ -909,15 +909,9 @@ export function createArkitSetup({
                 console.log(`[ARKit Setup] No AvatarExpressionDriver found`);
             }
             
-            // Eye ManagerとEyeLinearDriverを探して設定
+            // Eye Managerを探して設定
             console.log('[ARKit Setup] Setting up Eye Manager...');
             await findAndSetupEyeManager(avatarDeepResponse.data);
-        if (eyeLinearDriverOpenStateIds.Left) {
-            console.log(`[ARKit Setup] Found Left eye OpenState: ${eyeLinearDriverOpenStateIds.Left}`);
-        }
-        if (eyeLinearDriverOpenStateIds.Right) {
-            console.log(`[ARKit Setup] Found Right eye OpenState: ${eyeLinearDriverOpenStateIds.Right}`);
-        }
         }
 
         const smrPick = await pickSkinnedMeshRenderer(client, avatarSlot);
@@ -982,26 +976,26 @@ export function createArkitSetup({
         let foundShapes = Object.keys(resolvedMap);
         console.log(`[ARKit Setup] Found ${foundShapes.length} blendshapes in SMR`);
         
-        // EyeClosedRight/LeftはEyeLinearDriver経由で直接処理するため、foundShapesに追加
-        if ((eyeCloseOverrideIds.Right || eyeLinearDriverOpenStateIds.Right) && !foundShapes.includes('EyeClosedRight')) {
+        // EyeClosedRight/LeftはEyeCloseOverride経由で直接処理するため、foundShapesに追加
+        if (eyeCloseOverrideIds.Right && !foundShapes.includes('EyeClosedRight')) {
             foundShapes = [...foundShapes, 'EyeClosedRight'];
-            console.log('[ARKit Setup] Added EyeClosedRight to process (EyeCloseOverride/OpenState)');
+            console.log('[ARKit Setup] Added EyeClosedRight to process (EyeCloseOverride)');
         }
-        if ((eyeCloseOverrideIds.Left || eyeLinearDriverOpenStateIds.Left) && !foundShapes.includes('EyeClosedLeft')) {
+        if (eyeCloseOverrideIds.Left && !foundShapes.includes('EyeClosedLeft')) {
             foundShapes = [...foundShapes, 'EyeClosedLeft'];
-            console.log('[ARKit Setup] Added EyeClosedLeft to process (EyeCloseOverride/OpenState)');
+            console.log('[ARKit Setup] Added EyeClosedLeft to process (EyeCloseOverride)');
         }
 
         for (const shapeName of foundShapes) {
             let fieldId = resolvedMap[shapeName];
             
-            // EyeClosedRight/Leftの場合、EyeLinearDriverのOpenStateを使用
-            if (shapeName === 'EyeClosedRight' && (eyeCloseOverrideIds.Right || eyeLinearDriverOpenStateIds.Right)) {
-                fieldId = eyeCloseOverrideIds.Right || eyeLinearDriverOpenStateIds.Right;
-                console.log(`[ARKit Setup] ${shapeName}: Using EyeCloseOverride/OpenState instead of blendshape`);
-            } else if (shapeName === 'EyeClosedLeft' && (eyeCloseOverrideIds.Left || eyeLinearDriverOpenStateIds.Left)) {
-                fieldId = eyeCloseOverrideIds.Left || eyeLinearDriverOpenStateIds.Left;
-                console.log(`[ARKit Setup] ${shapeName}: Using EyeCloseOverride/OpenState instead of blendshape`);
+            // EyeClosedRight/Leftの場合、EyeCloseOverrideを使用
+            if (shapeName === 'EyeClosedRight' && eyeCloseOverrideIds.Right) {
+                fieldId = eyeCloseOverrideIds.Right;
+                console.log(`[ARKit Setup] ${shapeName}: Using EyeCloseOverride instead of blendshape`);
+            } else if (shapeName === 'EyeClosedLeft' && eyeCloseOverrideIds.Left) {
+                fieldId = eyeCloseOverrideIds.Left;
+                console.log(`[ARKit Setup] ${shapeName}: Using EyeCloseOverride instead of blendshape`);
             }
 
             const oscPath = buildOscPath(basePath, shapeName);
@@ -1203,11 +1197,12 @@ export function createArkitSetup({
     const handleFindBlendshape = async (req, res) => {
         res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
         const username = req.query.username;
+        const userSlotId = req.query.userSlotId;
         const port = parseInt(req.query.port, 10) || defaultResonitePort;
         const shapeName = req.query.shape || 'JawLeft';
 
-        if (!username) {
-            return res.status(400).send('Error: Username parameter required / エラー: usernameパラメータが必須です。');
+        if (!username && !userSlotId) {
+            return res.status(400).send('Error: Username or userSlotId parameter required / エラー: username または userSlotId パラメータが必須です。');
         }
 
         if (getIsSettingUp()) {
@@ -1215,40 +1210,14 @@ export function createArkitSetup({
         }
 
         setIsSettingUp(true);
-        console.log(`[FindBlendShape] Starting search for "${shapeName}" (user: ${username}, port: ${port})`);
+        const userLabel = buildUserLabel(username, userSlotId);
+        console.log(`[FindBlendShape] Starting search for "${shapeName}" (user: ${userLabel}, port: ${port})`);
 
         let driverId = null;
 
         try {
             const client = await ensureConnected(port);
-
-            let rootResponse = await client.getSlot('Root', 1, false);
-            if (!rootResponse.success) throw new Error('Failed to get root slot');
-
-            const findUserSlot = (slot) => {
-                if (!slot) return null;
-                const slotName = getSlotName(slot);
-                if (slotName && slotName.includes(username)) return slot;
-                if (slot.children) {
-                    for (const child of slot.children) {
-                        const result = findUserSlot(child);
-                        if (result) return result;
-                    }
-                }
-                return null;
-            };
-
-            let userSlot = findUserSlot(rootResponse.data);
-            if (!userSlot) {
-                rootResponse = await client.getSlot('Root', 3, false);
-                if (rootResponse.success) {
-                    userSlot = findUserSlot(rootResponse.data);
-                }
-            }
-
-            if (!userSlot) {
-                return res.send(`Error: User "${username}" not found. / エラー: "${username}" というユーザーが見つかりませんでした。`);
-            }
+            const userSlot = await resolveUserSlot(client, { username, userSlotId });
 
             console.log(`[FindBlendShape] Found user slot: ${getSlotName(userSlot)} (${userSlot.id})`);
             const userDeepResponse = await client.getSlot(userSlot.id, 10, false);
@@ -1268,7 +1237,7 @@ export function createArkitSetup({
 
             const faceTrackSlot = findFaceTrackSlot(userDeepResponse.data);
             if (!faceTrackSlot) {
-                return res.send(`Error: FaceTrack_ver slot not found under user "${username}". / エラー: "${username}" の下に FaceTrack_ver スロットが見つかりませんでした。`);
+                return res.send(`Error: FaceTrack_ver slot not found under user "${userLabel}". / エラー: "${userLabel}" の下に FaceTrack_ver スロットが見つかりませんでした。`);
             }
 
             const faceTrackDetail = await client.getSlot(faceTrackSlot.id, 2, true);
@@ -1392,14 +1361,15 @@ export function createArkitSetup({
     const handleSetupArkit = async (req, res) => {
         res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
         const username = req.query.username;
+        const userSlotId = req.query.userSlotId;
         const port = parseInt(req.query.port, 10) || defaultResonitePort;
         const limit = parseInt(req.query.limit || ARKIT_BLENDSHAPES.length, 10);
         const debugSelf = req.query.debugSelf === '1';
         const noType = req.query.noType === '1';
         const batch = parseInt(req.query.batch || 999, 10);
 
-        if (!username) {
-            return res.status(400).send('Error: Username parameter required / エラー: usernameパラメータが必須です。');
+        if (!username && !userSlotId) {
+            return res.status(400).send('Error: Username or userSlotId parameter required / エラー: username または userSlotId パラメータが必須です。');
         }
 
         if (getIsSettingUp()) {
@@ -1411,6 +1381,7 @@ export function createArkitSetup({
         try {
             const result = await runArkitSetup({
                 username,
+                userSlotId,
                 port,
                 limit,
                 debugSelf,

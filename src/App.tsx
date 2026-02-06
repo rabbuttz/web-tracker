@@ -49,6 +49,7 @@ type ControlCommand =
 
 const BLINK_HISTORY_SIZE = 5;
 const CONTROL_POLL_INTERVAL_MS = 500;
+const CAMERA_RETRY_INTERVAL_MS = 3000;
 
 const createBlinkHistory = (): BlinkHistory => ({
   inBlink: false,
@@ -76,6 +77,21 @@ function appLog(level: 'log' | 'info' | 'warn' | 'error', ...args: any[]) {
   }
 }
 
+function getMediaErrorName(error: unknown): string {
+  if (error instanceof DOMException) {
+    return error.name
+  }
+  if (error && typeof error === 'object' && 'name' in error) {
+    return String((error as { name?: unknown }).name ?? '')
+  }
+  return ''
+}
+
+function shouldRetryCameraAccess(error: unknown): boolean {
+  const errorName = getMediaErrorName(error)
+  return errorName !== 'NotAllowedError' && errorName !== 'SecurityError'
+}
+
 function App() {
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([])
   const [selectedDeviceId, setSelectedDeviceId] = useState<string>('')
@@ -86,6 +102,8 @@ function App() {
   const [blinkSyncEnabled, setBlinkSyncEnabled] = useState<boolean>(false)
   const [isWindowVisible, setIsWindowVisible] = useState<boolean>(true)
   const [setupStatus, setSetupStatus] = useState<string>('')
+  const [cameraRetryNonce, setCameraRetryNonce] = useState<number>(0)
+  const [isCameraRetryActive, setIsCameraRetryActive] = useState<boolean>(false)
   const [resoniteUsername, setResoniteUsername] = useState<string>(localStorage.getItem('resoniteUsername') || '')
   const [resonitePort, setResonitePort] = useState<number>(Number(localStorage.getItem('resonitePort')) || 10534)
   const [showAutoHideNotice, setShowAutoHideNotice] = useState<boolean>(false)
@@ -1049,6 +1067,22 @@ function App() {
     return () => navigator.mediaDevices.removeEventListener('devicechange', updateDevices)
   }, [selectedDeviceId])
 
+  useEffect(() => {
+    if (!isCameraRetryActive) {
+      return
+    }
+
+    appLog('warn', `Camera stream unavailable. Retrying every ${CAMERA_RETRY_INTERVAL_MS / 1000} seconds...`)
+    const timerId = window.setInterval(() => {
+      appLog('info', 'Retrying camera access...')
+      setCameraRetryNonce(current => current + 1)
+    }, CAMERA_RETRY_INTERVAL_MS)
+
+    return () => {
+      window.clearInterval(timerId)
+    }
+  }, [isCameraRetryActive])
+
   // MediaPipe setup
   useMediaPipe(
     videoElement,
@@ -1062,7 +1096,7 @@ function App() {
   return (
     <div className="app-container" style={{ position: 'relative', width: WIDTH, height: HEIGHT, backgroundColor: '#0f0f13', overflow: 'hidden' }}>
       <Webcam
-        key={selectedDeviceId}
+        key={`${selectedDeviceId}:${cameraRetryNonce}`}
         audio={false}
         style={{ visibility: 'hidden', position: 'absolute' }}
         width={WIDTH}
@@ -1072,11 +1106,18 @@ function App() {
         onUserMedia={() => {
           if (webcamRef.current?.video) {
             setVideoElement(webcamRef.current.video);
+            setIsCameraRetryActive(false)
             const deviceName = devices.find(d => d.deviceId === selectedDeviceId)?.label || 'Unknown device';
             appLog('info', `Camera stream started successfully: ${deviceName}`);
           }
         }}
         onUserMediaError={(err) => {
+          const willRetry = shouldRetryCameraAccess(err)
+          setVideoElement(null)
+          setIsCameraRetryActive(willRetry)
+          if (!willRetry) {
+            appLog('warn', `Camera access is blocked (${getMediaErrorName(err) || 'unknown'}). Retry is disabled until camera permission changes.`)
+          }
           appLog('error', 'Camera access failed:', err);
         }}
       />
@@ -1205,6 +1246,8 @@ function App() {
         devices={devices}
         selectedDeviceId={selectedDeviceId}
         onDeviceChange={(deviceId) => {
+          setVideoElement(null)
+          setIsCameraRetryActive(false)
           setSelectedDeviceId(deviceId)
           localStorage.setItem('selectedCameraDeviceId', deviceId)
           const device = devices.find(d => d.deviceId === deviceId)

@@ -5,6 +5,15 @@ import { createArkitSetup } from './arkit-setup.mjs';
 
 const WEB_PORT = 3000;
 const DEFAULT_RESONITE_PORT = 10534;
+const RESONITE_LINK_REFUSED_MESSAGE = 'ResoniteLinkが有効になっていない、またはResoniteLink Port番号が間違っています。ダッシュメニュー→セッションタブの左下からResoniteLinkを有効にしてください。セッションのホストである必要があります。 Check the ResoniteLink status or the Port Number.';
+
+const isConnectionRefusedError = (error) => {
+    if (!error) return false;
+    if (error.code === 'ECONNREFUSED') return true;
+    const nestedErrors = Array.isArray(error.errors) ? error.errors : [];
+    if (nestedErrors.some(err => err?.code === 'ECONNREFUSED')) return true;
+    return typeof error.message === 'string' && error.message.includes('ECONNREFUSED');
+};
 
 // ============================================
 // ResoniteLink Client
@@ -866,6 +875,7 @@ app.get('/setup-facetrack', async (req, res) => {
             console.log('[FaceTrack] Starting ARKit setup...');
             const arkitResult = await arkitSetup.runArkitSetup({
                 username,
+                userSlotId: userSlot?.id,
                 port,
                 limit: arkitLimit,
                 debugSelf: arkitDebugSelf,
@@ -883,7 +893,9 @@ app.get('/setup-facetrack', async (req, res) => {
         console.log('[FaceTrack] Response sent!');
     } catch (error) {
         console.error('[FaceTrack] Setup error:', error);
-        const errorMessage = `Error: ${error.message} / エラー: ${error.message}`;
+        const errorMessage = isConnectionRefusedError(error)
+            ? RESONITE_LINK_REFUSED_MESSAGE
+            : `Error: ${error.message} / エラー: ${error.message}`;
         console.log(`[FaceTrack] Sending error response: ${errorMessage}`);
         res.send(errorMessage);
     } finally {

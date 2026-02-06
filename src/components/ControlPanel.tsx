@@ -57,162 +57,196 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
 }) => {
 	return (
 		<div className="controls-panel">
-			<div className="control-group">
-				<label htmlFor="camera-select">Camera Source</label>
-				<select
-					id="camera-select"
-					value={selectedDeviceId}
-					onChange={(e) => onDeviceChange(e.target.value)}
-					className="glass-select"
-				>
-					{devices.map((device) => (
-						<option key={device.deviceId} value={device.deviceId}>
-							{device.label || `Camera ${device.deviceId.slice(0, 5)}`}
-						</option>
-					))}
-				</select>
+			<div className="panel-header">
+				<div className="panel-title">Tracking Controls</div>
+				<div className="panel-subtitle">Camera, calibration, and OSC output</div>
 			</div>
 
-			<div className="control-group">
-				<button className="glass-button" onClick={onCalibrate}>
-					Head Calibrate
-				</button>
-			</div>
-
-			<div className="control-group setup-section">
-				<label>Automated Setup (Resonite)</label>
-				<input
-					type="text"
-					placeholder="Resonite Username"
-					value={resoniteUsername}
-					onChange={(e) => onResoniteUsernameChange(e.target.value)}
-					className="glass-input"
-				/>
-				<input
-					type="number"
-					placeholder="Port (Default 10534)"
-					value={resonitePort}
-					onChange={(e) => onResonitePortChange(Number(e.target.value))}
-					className="glass-input"
-				/>
-				<button className="glass-button setup-button" onClick={onSetupFacetrack}>
-					Run Automated Setup
-				</button>
-				{setupStatus && <div className="status-text">{setupStatus}</div>}
-			</div>
-
-			<div className="control-group">
-				<label className="checkbox-label">
-					<input
-						type="checkbox"
-						checked={autoCalibrate}
-						onChange={(e) => onAutoCalibrateChange(e.target.checked)}
-						className="glass-checkbox"
-					/>
-					<span>Auto Calibrate (5s still)</span>
-				</label>
-			</div>
-
-			<div className="control-group">
-				<label className="checkbox-label">
-					<input
-						type="checkbox"
-						checked={blinkSyncEnabled}
-						onChange={(e) => onBlinkSyncChange(e.target.checked)}
-						className="glass-checkbox"
-					/>
-					<span>Blink Sync (L+R Avg)</span>
-				</label>
-			</div>
-
-			<div className="control-group">
-				<button
-					className="glass-button hand-calib-button"
-					onClick={onHandCalibrate}
-					disabled={handCalibCountdown !== null}
-				>
-					{handCalibCountdown !== null
-						? `Hand Calibrate (${handCalibCountdown})`
-						: 'Hand Calibrate'}
-				</button>
-			</div>
-
-			<div className="control-group">
-				<button className="glass-button reset-button" onClick={onResetCalibration}>
-					Reset All Calibration
-				</button>
-			</div>
-
-			<div className="control-group">
-				<label>Expression Mode</label>
-				<div className="mode-toggle-container">
-					<div className="mode-button-group">
-						<button
-							className={`mode-button ${expressionMode === 'visemeBlendshape' ? 'active' : ''}`}
-							onClick={() => expressionMode !== 'visemeBlendshape' && onSetMode('visemeBlendshape')}
+			<div className="panel-section">
+				<div className="section-title">Camera</div>
+				<div className="section-body">
+					<div className="control-group">
+						<label htmlFor="camera-select">Source</label>
+						<select
+							id="camera-select"
+							value={selectedDeviceId}
+							onChange={(e) => onDeviceChange(e.target.value)}
+							className="glass-select"
 						>
-							Viseme (Standard)
-						</button>
-						<button
-							className={`mode-button ${expressionMode === 'blendshape' ? 'active' : ''}`}
-							onClick={() => expressionMode !== 'blendshape' && onSetMode('blendshape')}
-						>
-							Perfect Sync
+							{devices.map((device) => (
+								<option key={device.deviceId} value={device.deviceId}>
+									{device.label || `Camera ${device.deviceId.slice(0, 5)}`}
+								</option>
+							))}
+						</select>
+					</div>
+				</div>
+			</div>
+
+			<div className="panel-section">
+				<div className="section-title">Calibration</div>
+				<div className="section-body">
+					<div className="control-group">
+						<div className="button-row">
+							<button className="glass-button" onClick={onCalibrate}>
+								Head Calibrate
+							</button>
+							<button
+								className="glass-button hand-calib-button"
+								onClick={onHandCalibrate}
+								disabled={handCalibCountdown !== null}
+							>
+								{handCalibCountdown !== null
+									? `Hand Calibrate (${handCalibCountdown})`
+									: 'Hand Calibrate'}
+							</button>
+						</div>
+					</div>
+					<div className="control-group">
+						<button className="glass-button reset-button" onClick={onResetCalibration}>
+							Reset All Calibration
 						</button>
 					</div>
 				</div>
-				<div className="mode-description">
-					{expressionMode === 'visemeBlendshape' && 'Blendshape-based aiueo calculation'}
-					{expressionMode === 'blendshape' && 'Direct blendshape parameters'}
+			</div>
+
+			<div className="panel-section">
+				<div className="section-title">Tracking</div>
+				<div className="section-body">
+					<label className="checkbox-label">
+						<input
+							type="checkbox"
+							checked={autoCalibrate}
+							onChange={(e) => onAutoCalibrateChange(e.target.checked)}
+							className="glass-checkbox"
+						/>
+						<span>Auto Calibrate (5s still)</span>
+					</label>
+					<label className="checkbox-label">
+						<input
+							type="checkbox"
+							checked={blinkSyncEnabled}
+							onChange={(e) => onBlinkSyncChange(e.target.checked)}
+							className="glass-checkbox"
+						/>
+						<span>Blink Sync (L+R Avg)</span>
+					</label>
+				</div>
+			</div>
+
+			<div className="panel-section">
+				<div className="section-title">Expression</div>
+				<div className="section-body">
+					<div className="control-group">
+						<label>Mode</label>
+						<div className="mode-toggle-container">
+							<div className="mode-button-group">
+								<button
+									className={`mode-button ${expressionMode === 'visemeBlendshape' ? 'active' : ''}`}
+									onClick={() => expressionMode !== 'visemeBlendshape' && onSetMode('visemeBlendshape')}
+								>
+									Viseme (Standard)
+								</button>
+								<button
+									className={`mode-button ${expressionMode === 'blendshape' ? 'active' : ''}`}
+									onClick={() => expressionMode !== 'blendshape' && onSetMode('blendshape')}
+								>
+									Perfect Sync
+								</button>
+							</div>
+						</div>
+						<div className="mode-description">
+							{expressionMode === 'visemeBlendshape' && 'Blendshape-based aiueo calculation'}
+							{expressionMode === 'blendshape' && 'Direct blendshape parameters'}
+						</div>
+					</div>
+				</div>
+			</div>
+
+			<div className="panel-section">
+				<div className="section-title">Resonite Setup</div>
+				<div className="section-body">
+					<div className="setup-grid">
+						<div className="control-group">
+							<label>Username</label>
+							<input
+								type="text"
+								placeholder="Resonite Username"
+								value={resoniteUsername}
+								onChange={(e) => onResoniteUsernameChange(e.target.value)}
+								className="glass-input"
+							/>
+						</div>
+						<div className="control-group">
+							<label>Port</label>
+							<input
+								type="number"
+								placeholder="10534"
+								value={resonitePort}
+								onChange={(e) => onResonitePortChange(Number(e.target.value))}
+								className="glass-input"
+							/>
+						</div>
+					</div>
+					<div className="control-group">
+						<button className="glass-button setup-button" onClick={onSetupFacetrack}>
+							Run Automated Setup
+						</button>
+						{setupStatus && <div className="status-text">{setupStatus}</div>}
+					</div>
 				</div>
 			</div>
 
 			{expressionMode === 'visemeBlendshape' && mouthDebug && (
-				<div className="control-group debug-section">
-					<label>Mouth Debug (あいうえお)</label>
-					<div className="debug-grid">
-						<div className="debug-item">
-							<span className="debug-label">Height:</span>
-							<span className="debug-value">{mouthDebug.nHeight.toFixed(3)}</span>
-						</div>
-						<div className="debug-item">
-							<span className="debug-label">Width:</span>
-							<span className="debug-value">{mouthDebug.nWidth.toFixed(3)}</span>
-						</div>
-						<div className="debug-item viseme">
-							<span className="debug-label">あ (aa):</span>
-							<span className="debug-value">{mouthDebug.aa.toFixed(3)}</span>
-						</div>
-						<div className="debug-item viseme">
-							<span className="debug-label">い (ih):</span>
-							<span className="debug-value">{mouthDebug.ih.toFixed(3)}</span>
-						</div>
-						<div className="debug-item viseme">
-							<span className="debug-label">う (ou):</span>
-							<span className="debug-value">{mouthDebug.ou.toFixed(3)}</span>
-						</div>
-						<div className="debug-item viseme">
-							<span className="debug-label">え (E):</span>
-							<span className="debug-value">{mouthDebug.E.toFixed(3)}</span>
-						</div>
-						<div className="debug-item viseme">
-							<span className="debug-label">お (oh):</span>
-							<span className="debug-value">{mouthDebug.oh.toFixed(3)}</span>
+				<div className="panel-section debug-section">
+					<div className="section-title">Mouth Debug (あいうえお)</div>
+					<div className="section-body">
+						<div className="debug-grid">
+							<div className="debug-item">
+								<span className="debug-label">Height:</span>
+								<span className="debug-value">{mouthDebug.nHeight.toFixed(3)}</span>
+							</div>
+							<div className="debug-item">
+								<span className="debug-label">Width:</span>
+								<span className="debug-value">{mouthDebug.nWidth.toFixed(3)}</span>
+							</div>
+							<div className="debug-item viseme">
+								<span className="debug-label">あ (aa):</span>
+								<span className="debug-value">{mouthDebug.aa.toFixed(3)}</span>
+							</div>
+							<div className="debug-item viseme">
+								<span className="debug-label">い (ih):</span>
+								<span className="debug-value">{mouthDebug.ih.toFixed(3)}</span>
+							</div>
+							<div className="debug-item viseme">
+								<span className="debug-label">う (ou):</span>
+								<span className="debug-value">{mouthDebug.ou.toFixed(3)}</span>
+							</div>
+							<div className="debug-item viseme">
+								<span className="debug-label">え (E):</span>
+								<span className="debug-value">{mouthDebug.E.toFixed(3)}</span>
+							</div>
+							<div className="debug-item viseme">
+								<span className="debug-label">お (oh):</span>
+								<span className="debug-value">{mouthDebug.oh.toFixed(3)}</span>
+							</div>
 						</div>
 					</div>
 				</div>
 			)}
 
 			{expressionMode === 'blendshape' && blendshapeDebug && blendshapeDebug.length > 0 && (
-				<div className="control-group debug-section">
-					<label>Blendshapes ({blendshapeDebug.length})</label>
-					<div className="debug-grid blendshape-grid">
-						{blendshapeDebug.map((bs, index) => (
-							<div key={index} className="debug-item blendshape">
-								<span className="debug-label">{bs.name}:</span>
-								<span className="debug-value">{bs.value.toFixed(3)}</span>
-							</div>
-						))}
+				<div className="panel-section debug-section">
+					<div className="section-title">Blendshapes ({blendshapeDebug.length})</div>
+					<div className="section-body">
+						<div className="debug-grid blendshape-grid">
+							{blendshapeDebug.map((bs, index) => (
+								<div key={index} className="debug-item blendshape">
+									<span className="debug-label">{bs.name}:</span>
+									<span className="debug-value">{bs.value.toFixed(3)}</span>
+								</div>
+							))}
+						</div>
 					</div>
 				</div>
 			)}
@@ -222,16 +256,65 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
 					position: absolute;
 					top: 20px;
 					left: 20px;
-					background: rgba(20, 20, 25, 0.7);
-					backdrop-filter: blur(12px);
-					padding: 16px;
-					border-radius: 12px;
-					border: 1px solid rgba(255, 255, 255, 0.1);
-					box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+					background: rgba(18, 18, 24, 0.78);
+					backdrop-filter: blur(14px);
+					padding: 14px;
+					border-radius: 14px;
+					border: 1px solid rgba(255, 255, 255, 0.08);
+					box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45);
 					z-index: 100;
-					min-width: 240px;
+					width: 280px;
+					max-height: calc(100vh - 40px);
+					overflow-y: auto;
 					font-family: 'Inter', system-ui, sans-serif;
 					color: #eee;
+					display: flex;
+					flex-direction: column;
+					gap: 12px;
+				}
+				.controls-panel::-webkit-scrollbar {
+					width: 8px;
+				}
+				.controls-panel::-webkit-scrollbar-thumb {
+					background: rgba(255, 255, 255, 0.18);
+					border-radius: 6px;
+				}
+				.panel-header {
+					display: flex;
+					flex-direction: column;
+					gap: 4px;
+					padding-bottom: 8px;
+					border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+				}
+				.panel-title {
+					font-size: 14px;
+					font-weight: 700;
+					letter-spacing: 0.02em;
+				}
+				.panel-subtitle {
+					font-size: 11px;
+					color: rgba(255, 255, 255, 0.55);
+				}
+				.panel-section {
+					display: flex;
+					flex-direction: column;
+					gap: 10px;
+					padding: 10px;
+					background: rgba(28, 28, 36, 0.6);
+					border-radius: 10px;
+					border: 1px solid rgba(255, 255, 255, 0.06);
+				}
+				.section-title {
+					font-size: 11px;
+					font-weight: 700;
+					text-transform: uppercase;
+					letter-spacing: 0.08em;
+					color: rgba(255, 255, 255, 0.6);
+				}
+				.section-body {
+					display: flex;
+					flex-direction: column;
+					gap: 10px;
 				}
 				.control-group {
 					display: flex;
@@ -241,9 +324,16 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
 				.control-group label {
 					font-size: 12px;
 					font-weight: 600;
-					text-transform: uppercase;
-					letter-spacing: 0.05em;
-					color: #999;
+					color: rgba(255, 255, 255, 0.65);
+				}
+				.button-row {
+					display: grid;
+					grid-template-columns: repeat(2, minmax(0, 1fr));
+					gap: 8px;
+				}
+				.setup-grid {
+					display: grid;
+					gap: 8px;
 				}
 				.glass-select {
 					background: rgba(40, 40, 50, 0.5);
@@ -280,7 +370,7 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
 				}
 				.status-text {
 					font-size: 11px;
-					color: #8cb9ff;
+					color: #9fc5ff;
 					margin-top: 4px;
 					line-height: 1.4;
 				}
@@ -296,9 +386,9 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
 					background: rgba(60, 100, 180, 0.5);
 					border: 1px solid rgba(100, 150, 255, 0.3);
 					border-radius: 6px;
-					padding: 10px 16px;
+					padding: 9px 12px;
 					color: white;
-					font-size: 14px;
+					font-size: 13px;
 					font-weight: 600;
 					cursor: pointer;
 					transition: all 0.2s ease;
@@ -357,7 +447,7 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
 					align-items: center;
 					gap: 8px;
 					cursor: pointer;
-					font-size: 13px;
+					font-size: 12px;
 					color: #ddd;
 					user-select: none;
 				}
@@ -368,9 +458,7 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
 					accent-color: rgba(100, 150, 255, 0.8);
 				}
 				.debug-section {
-					margin-top: 12px;
-					padding-top: 12px;
-					border-top: 1px solid rgba(255, 255, 255, 0.1);
+					background: rgba(24, 24, 34, 0.7);
 				}
 				.debug-grid {
 					display: flex;
@@ -397,7 +485,7 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
 					background: rgba(60, 180, 120, 0.2);
 				}
 				.mode-toggle-container {
-					margin-top: 8px;
+					margin-top: 4px;
 				}
 				.mode-button-group {
 					display: flex;
@@ -412,7 +500,7 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
 					border-radius: 6px;
 					padding: 8px 6px;
 					color: #888;
-					font-size: 11px;
+					font-size: 10px;
 					font-weight: 500;
 					cursor: pointer;
 					transition: all 0.2s ease;
@@ -431,9 +519,7 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
 				.mode-description {
 					margin-top: 6px;
 					font-size: 10px;
-					color: #666;
-					font-style: italic;
-					text-align: center;
+					color: rgba(255, 255, 255, 0.5);
 				}
 				.debug-label {
 					color: #aaa;
