@@ -1,10 +1,8 @@
 interface AutoHideNoticeProps {
   visible: boolean;
-  width: number;
-  height: number;
 }
 
-export function AutoHideNotice({ visible, width, height }: AutoHideNoticeProps) {
+export function AutoHideNotice({ visible }: AutoHideNoticeProps) {
   if (!visible) {
     return null;
   }
@@ -12,16 +10,14 @@ export function AutoHideNotice({ visible, width, height }: AutoHideNoticeProps) 
   return (
     <div style={{
       position: 'absolute',
-      top: 0,
-      left: 0,
-      width,
-      height,
+      inset: 0,
       backgroundColor: 'rgba(26, 26, 46, 0.7)',
       display: 'flex',
       alignItems: 'center',
       justifyContent: 'center',
       zIndex: 1000,
-      pointerEvents: 'none'
+      pointerEvents: 'none',
+      borderRadius: 8
     }}>
       <div style={{
         display: 'flex',

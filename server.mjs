@@ -682,35 +682,62 @@ app.get('/setup-facetrack', async (req, res) => {
         console.log(`[FaceTrack] Searching for user: ${username}...`);
         console.log(`[FaceTrack] Root has ${rootResponse.data.children?.length || 0} direct children`);
 
-        // Recursive search function
-        const findUserSlot = (slot, depth = 0) => {
+        // Collect all candidate slots matching the user name pattern
+        const SKIP_SLOTS = ['Undo Manager', '__TEMP'];
+        const findUserSlotCandidates = (slot, depth = 0) => {
+            const results = [];
             const name = getSlotName(slot);
             const indent = '  '.repeat(depth);
             console.log(`[FaceTrack] ${indent}Checking: "${name}"`);
 
+            if (SKIP_SLOTS.includes(name)) {
+                console.log(`[FaceTrack] ${indent}-> Skipping (system slot)`);
+                return results;
+            }
+
             if (name.includes(username) && name.startsWith('User')) {
-                console.log(`[FaceTrack] ${indent}-> MATCH!`);
-                return slot;
+                console.log(`[FaceTrack] ${indent}-> Name match!`);
+                results.push(slot);
             }
 
             if (slot.children) {
                 for (const child of slot.children) {
-                    const found = findUserSlot(child, depth + 1);
-                    if (found) return found;
+                    results.push(...findUserSlotCandidates(child, depth + 1));
                 }
             }
-            return null;
+            return results;
         };
 
-        let userSlot = findUserSlot(rootResponse.data);
+        // Verify a candidate has UserRoot component (real user slot)
+        const verifyUserSlot = async (candidate) => {
+            const detail = await resoniteClient.getSlot(candidate.id, 0, true);
+            if (!detail.success || !detail.data.components) return false;
+            return detail.data.components.some(c =>
+                (c.type || c.componentType || '').includes('UserRoot')
+            );
+        };
 
-        // If not found in depth=1, try deeper search (depth=3)
-        if (!userSlot) {
+        let candidates = findUserSlotCandidates(rootResponse.data);
+
+        // If no candidates in depth=1, try deeper search (depth=3)
+        if (candidates.length === 0) {
             console.log('[FaceTrack] User not found in depth=1, searching deeper (depth=3)...');
             rootResponse = await resoniteClient.getSlot('Root', 3, false);
             if (rootResponse.success) {
-                userSlot = findUserSlot(rootResponse.data);
+                candidates = findUserSlotCandidates(rootResponse.data);
             }
+        }
+
+        // Verify candidates have UserRoot component
+        let userSlot = null;
+        for (const candidate of candidates) {
+            console.log(`[FaceTrack] Verifying candidate: ${getSlotName(candidate)} (${candidate.id})...`);
+            if (await verifyUserSlot(candidate)) {
+                console.log(`[FaceTrack] -> Confirmed (has UserRoot component)`);
+                userSlot = candidate;
+                break;
+            }
+            console.log(`[FaceTrack] -> Rejected (no UserRoot component)`);
         }
 
         if (!userSlot) {

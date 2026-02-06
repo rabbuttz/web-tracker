@@ -5,6 +5,7 @@ import { ControlPanel } from './components/ControlPanel';
 import { LoadingOverlay } from './components/LoadingOverlay';
 import { CalibrationCountdown } from './components/CalibrationCountdown';
 import { AutoHideNotice } from './components/AutoHideNotice';
+import { CloseHint } from './components/CloseHint';
 import { useMediaPipe } from './hooks/useMediaPipe';
 import { useThreeManager } from './hooks/useThreeManager';
 import { useCalibration } from './hooks/useCalibration';
@@ -237,48 +238,7 @@ function App() {
   useMediaPipe(videoElement, processResults, selectedDeviceId, setIsLoading, { outputBlendshapes: true });
 
   return (
-    <div className="app-container" style={{ position: 'relative', width: WIDTH, height: HEIGHT, backgroundColor: '#1a1a2e', overflow: 'hidden' }}>
-      <Webcam
-        key={`${selectedDeviceId}:${cameraRetryNonce}`}
-        audio={false}
-        style={{ visibility: 'hidden', position: 'absolute' }}
-        width={WIDTH}
-        height={HEIGHT}
-        ref={handleWebcamRef}
-        videoConstraints={{
-          width: WIDTH,
-          height: HEIGHT,
-          deviceId: selectedDeviceId ? { exact: selectedDeviceId } : undefined
-        }}
-        onUserMedia={() => {
-          if (webcamRef.current?.video) {
-            setVideoElement(webcamRef.current.video);
-            handleCameraStarted();
-          }
-        }}
-        onUserMediaError={(error) => {
-          setVideoElement(null);
-          handleCameraError(error);
-        }}
-      />
-
-      <canvas
-        ref={canvasRef}
-        width={WIDTH}
-        height={HEIGHT}
-        style={{ position: 'absolute', width: WIDTH, height: HEIGHT, backgroundColor: '#16213e' }}
-      />
-      <canvas
-        ref={threeCanvasRef}
-        width={WIDTH}
-        height={HEIGHT}
-        style={{ position: 'absolute', width: WIDTH, height: HEIGHT, pointerEvents: 'none' }}
-      />
-
-      <LoadingOverlay isVisible={isLoading} width={WIDTH} height={HEIGHT} />
-      <CalibrationCountdown countdown={handCalibCountdown} width={WIDTH} height={HEIGHT} />
-      <AutoHideNotice visible={showAutoHideNotice} width={WIDTH} height={HEIGHT} />
-
+    <div className="app-container" style={{ display: 'flex', width: '100vw', height: '100vh', backgroundColor: '#1a1a2e', overflow: 'hidden' }}>
       <ControlPanel
         devices={devices}
         selectedDeviceId={selectedDeviceId}
@@ -319,6 +279,52 @@ function App() {
         }}
         onSetupFacetrack={handleSetupFacetrack}
       />
+
+      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16, minWidth: 0, position: 'relative' }}>
+        <Webcam
+          key={`${selectedDeviceId}:${cameraRetryNonce}`}
+          audio={false}
+          style={{ visibility: 'hidden', position: 'absolute', width: 0, height: 0 }}
+          width={WIDTH}
+          height={HEIGHT}
+          ref={handleWebcamRef}
+          videoConstraints={{
+            width: WIDTH,
+            height: HEIGHT,
+            deviceId: selectedDeviceId ? { exact: selectedDeviceId } : undefined
+          }}
+          onUserMedia={() => {
+            if (webcamRef.current?.video) {
+              setVideoElement(webcamRef.current.video);
+              handleCameraStarted();
+            }
+          }}
+          onUserMediaError={(error) => {
+            setVideoElement(null);
+            handleCameraError(error);
+          }}
+        />
+
+        <div style={{ position: 'relative', maxWidth: '100%', maxHeight: '100%', lineHeight: 0 }}>
+          <canvas
+            ref={canvasRef}
+            width={WIDTH}
+            height={HEIGHT}
+            style={{ display: 'block', maxWidth: '100%', maxHeight: 'calc(100vh - 32px)', backgroundColor: '#16213e', borderRadius: 8 }}
+          />
+          <canvas
+            ref={threeCanvasRef}
+            width={WIDTH}
+            height={HEIGHT}
+            style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none', borderRadius: 8 }}
+          />
+
+          <LoadingOverlay isVisible={isLoading} />
+          <CalibrationCountdown countdown={handCalibCountdown} />
+          <AutoHideNotice visible={showAutoHideNotice} />
+          <CloseHint />
+        </div>
+      </div>
     </div>
   );
 }

@@ -1,10 +1,8 @@
 interface LoadingOverlayProps {
   isVisible: boolean;
-  width: number;
-  height: number;
 }
 
-export function LoadingOverlay({ isVisible, width, height }: LoadingOverlayProps) {
+export function LoadingOverlay({ isVisible }: LoadingOverlayProps) {
   if (!isVisible) {
     return null;
   }
@@ -12,15 +10,13 @@ export function LoadingOverlay({ isVisible, width, height }: LoadingOverlayProps
   return (
     <div style={{
       position: 'absolute',
-      top: 0,
-      left: 0,
-      width,
-      height,
+      inset: 0,
       display: 'flex',
       alignItems: 'center',
       justifyContent: 'center',
       backgroundColor: 'rgba(26, 26, 46, 0.9)',
-      zIndex: 100
+      zIndex: 100,
+      borderRadius: 8
     }}>
       <div style={{ textAlign: 'center' }}>
         <div style={{

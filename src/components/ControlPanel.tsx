@@ -253,23 +253,20 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
 
 			<style>{`
 				.controls-panel {
-					position: absolute;
-					top: 20px;
-					left: 20px;
 					background: #16213e;
-					padding: 14px;
-					border-radius: 14px;
-					border: 1px solid rgba(0, 212, 255, 0.15);
-					box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45);
+					padding: 12px;
+					border-right: 1px solid rgba(0, 212, 255, 0.15);
 					z-index: 100;
-					width: 280px;
-					max-height: calc(100vh - 40px);
+					width: 290px;
+					height: 100vh;
 					overflow-y: auto;
 					font-family: 'Inter', system-ui, sans-serif;
 					color: #fff;
 					display: flex;
 					flex-direction: column;
-					gap: 12px;
+					gap: 8px;
+					flex-shrink: 0;
+					box-sizing: border-box;
 				}
 				.controls-panel::-webkit-scrollbar {
 					width: 8px;
@@ -301,10 +298,10 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
 				.panel-section {
 					display: flex;
 					flex-direction: column;
-					gap: 10px;
-					padding: 10px;
+					gap: 6px;
+					padding: 8px;
 					background: rgba(15, 52, 96, 0.6);
-					border-radius: 10px;
+					border-radius: 8px;
 					border: 1px solid rgba(0, 212, 255, 0.1);
 				}
 				.section-title {
@@ -317,12 +314,12 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
 				.section-body {
 					display: flex;
 					flex-direction: column;
-					gap: 10px;
+					gap: 6px;
 				}
 				.control-group {
 					display: flex;
 					flex-direction: column;
-					gap: 8px;
+					gap: 5px;
 				}
 				.control-group label {
 					font-size: 12px;
@@ -342,9 +339,9 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
 					background: #0f3460;
 					border: 1px solid rgba(0, 212, 255, 0.15);
 					border-radius: 6px;
-					padding: 8px 12px;
+					padding: 6px 10px;
 					color: white;
-					font-size: 14px;
+					font-size: 13px;
 					outline: none;
 					cursor: pointer;
 					transition: all 0.2s ease;
@@ -363,9 +360,9 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
 					background: #0f3460;
 					border: 1px solid rgba(0, 212, 255, 0.15);
 					border-radius: 6px;
-					padding: 8px 12px;
+					padding: 6px 10px;
 					color: white;
-					font-size: 14px;
+					font-size: 13px;
 					outline: none;
 					transition: all 0.2s ease;
 				}
@@ -390,9 +387,9 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
 					background: rgba(0, 212, 255, 0.15);
 					border: 1px solid rgba(0, 212, 255, 0.3);
 					border-radius: 6px;
-					padding: 9px 12px;
+					padding: 7px 10px;
 					color: white;
-					font-size: 13px;
+					font-size: 12px;
 					font-weight: 600;
 					cursor: pointer;
 					transition: all 0.2s ease;

@@ -540,10 +540,12 @@ function createWindow(showWindow = true) {
     const iconPath = path.join(__dirname, 'build', 'icon.png');
 
     mainWindow = new BrowserWindow({
-        width: 1280,
-        height: 720,
+        width: 1100,
+        height: 780,
         icon: iconPath,
         show: false,  // Don't show immediately
+        minimizable: false,
+        maximizable: false,
         webPreferences: {
             preload: path.join(__dirname, 'preload.js'),
             nodeIntegration: false,

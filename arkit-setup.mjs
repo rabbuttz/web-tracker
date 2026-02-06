@@ -633,19 +633,31 @@ export function createArkitSetup({
         return 'unknown';
     };
 
-    const findUserSlotByName = (slot, username) => {
-        if (!slot) return null;
+    const SKIP_SLOTS = ['Undo Manager', '__TEMP'];
+    const findUserSlotCandidates = (slot, username) => {
+        if (!slot) return [];
+        const results = [];
         const slotName = getSlotName(slot);
+        if (SKIP_SLOTS.includes(slotName)) {
+            return results;
+        }
         if (slotName && slotName.startsWith('User') && slotName.includes(username)) {
-            return slot;
+            results.push(slot);
         }
         if (slot.children) {
             for (const child of slot.children) {
-                const result = findUserSlotByName(child, username);
-                if (result) return result;
+                results.push(...findUserSlotCandidates(child, username));
             }
         }
-        return null;
+        return results;
+    };
+
+    const verifyUserSlot = async (client, candidate) => {
+        const detail = await client.getSlot(candidate.id, 0, true);
+        if (!detail.success || !detail.data.components) return false;
+        return detail.data.components.some(c =>
+            (c.type || c.componentType || '').includes('UserRoot')
+        );
     };
 
     const resolveUserSlot = async (client, { username, userSlotId }) => {
@@ -664,19 +676,24 @@ export function createArkitSetup({
         let rootResponse = await client.getSlot('Root', 1, false);
         if (!rootResponse.success) throw new Error('Failed to get root slot');
 
-        let userSlot = findUserSlotByName(rootResponse.data, username);
-        if (!userSlot) {
+        let candidates = findUserSlotCandidates(rootResponse.data, username);
+        if (candidates.length === 0) {
             rootResponse = await client.getSlot('Root', 3, false);
             if (rootResponse.success) {
-                userSlot = findUserSlotByName(rootResponse.data, username);
+                candidates = findUserSlotCandidates(rootResponse.data, username);
             }
         }
 
-        if (!userSlot) {
-            throw new Error(`User "${username}" not found.`);
+        for (const candidate of candidates) {
+            console.log(`[ARKit Setup] Verifying candidate: ${getSlotName(candidate)} (${candidate.id})...`);
+            if (await verifyUserSlot(client, candidate)) {
+                console.log(`[ARKit Setup] -> Confirmed (has UserRoot component)`);
+                return candidate;
+            }
+            console.log(`[ARKit Setup] -> Rejected (no UserRoot component)`);
         }
 
-        return userSlot;
+        throw new Error(`User "${username}" not found.`);
     };
 
     const ensureConnected = async (port) => {

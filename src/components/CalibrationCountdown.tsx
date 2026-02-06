@@ -1,10 +1,8 @@
 interface CalibrationCountdownProps {
   countdown: number | null;
-  width: number;
-  height: number;
 }
 
-export function CalibrationCountdown({ countdown, width, height }: CalibrationCountdownProps) {
+export function CalibrationCountdown({ countdown }: CalibrationCountdownProps) {
   if (countdown === null) {
     return null;
   }
@@ -12,16 +10,14 @@ export function CalibrationCountdown({ countdown, width, height }: CalibrationCo
   return (
     <div style={{
       position: 'absolute',
-      top: 0,
-      left: 0,
-      width,
-      height,
+      inset: 0,
       display: 'flex',
       alignItems: 'center',
       justifyContent: 'center',
       backgroundColor: 'rgba(26, 26, 46, 0.6)',
       pointerEvents: 'none',
-      zIndex: 50
+      zIndex: 50,
+      borderRadius: 8
     }}>
       <div style={{
         fontSize: '120px',
