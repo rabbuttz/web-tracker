@@ -172,7 +172,11 @@ let lastResoniteSignalMode = 'unknown';
 const app = express();
 app.use(express.json());
 app.use((req, res, next) => {
-    res.setHeader('Access-Control-Allow-Origin', '*');
+    const origin = req.headers.origin || '';
+    const allowedOrigins = ['http://localhost:5173', 'http://localhost:3000', 'http://127.0.0.1:5173', 'http://127.0.0.1:3000'];
+    if (allowedOrigins.includes(origin)) {
+        res.setHeader('Access-Control-Allow-Origin', origin);
+    }
     res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
     if (req.method === 'OPTIONS') {
@@ -633,7 +637,8 @@ async function setupMouthShapeKeys(client, avatarSlot, faceTrackSlot) {
 app.get('/setup-facetrack', async (req, res) => {
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
     const username = req.query.username;
-    const port = parseInt(req.query.port) || DEFAULT_RESONITE_PORT;
+    const rawPort = parseInt(req.query.port) || DEFAULT_RESONITE_PORT;
+    const port = (rawPort >= 1 && rawPort <= 65535) ? rawPort : DEFAULT_RESONITE_PORT;
     const arkitParam = req.query.arkit;
     const runArkit = arkitParam === undefined
         ? true

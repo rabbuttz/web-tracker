@@ -27,6 +27,12 @@ export function useMediaPipe(
   const [isInitialized, setIsInitialized] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Use refs for callbacks to avoid re-initializing MediaPipe when callbacks change
+  const onResultsRef = useRef(onResults);
+  onResultsRef.current = onResults;
+  const onLoadingChangeRef = useRef(onLoadingChange);
+  onLoadingChangeRef.current = onLoadingChange;
+
   useEffect(() => {
     if (!deviceId || !videoElement) {
       return;
@@ -38,7 +44,7 @@ export function useMediaPipe(
     const init = async () => {
       try {
         mpLog('info', 'Initializing MediaPipe...');
-        onLoadingChange?.(true);
+        onLoadingChangeRef.current?.(true);
 
         // Use unpkg instead of jsDelivr for better WASM file availability
         const wasmPath = 'https://unpkg.com/@mediapipe/tasks-vision@0.10.32/wasm';
@@ -80,7 +86,7 @@ export function useMediaPipe(
         handLandmarkerRef.current = handLandmarker;
         setIsInitialized(true);
         setError(null);
-        onLoadingChange?.(false);
+        onLoadingChangeRef.current?.(false);
         mpLog('info', '✓ MediaPipe initialization complete - ready for tracking');
 
         const processFrame = () => {
@@ -89,10 +95,10 @@ export function useMediaPipe(
             const now = performance.now();
             const faceResult = faceLandmarker.detectForVideo(videoElement, now);
             const handResult = handLandmarker.detectForVideo(videoElement, now);
-            onResults(faceResult, handResult);
+            onResultsRef.current(faceResult, handResult);
           } else {
             // Still call onResults with null so canvas can show waiting message
-            onResults(null, null);
+            onResultsRef.current(null, null);
           }
           rafId = requestAnimationFrame(processFrame);
         };
@@ -104,7 +110,7 @@ export function useMediaPipe(
           mpLog('error', 'Stack trace:', err.stack);
         }
         setError(errorMessage);
-        onLoadingChange?.(false);
+        onLoadingChangeRef.current?.(false);
       }
     };
 
@@ -124,7 +130,9 @@ export function useMediaPipe(
       }
       setIsInitialized(false);
     };
-  }, [videoElement, deviceId, onResults, onLoadingChange, options?.outputBlendshapes]);
+  // onResults and onLoadingChange are accessed via refs to avoid re-initialization
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [videoElement, deviceId, options?.outputBlendshapes]);
 
   return { isInitialized, error };
 }

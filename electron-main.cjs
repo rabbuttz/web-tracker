@@ -590,11 +590,15 @@ function createWindow(showWindow = true) {
     });
 
     mainWindow.on('hide', () => {
-        mainWindow.webContents.send('window-visibility-change', false);
+        if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send('window-visibility-change', false);
+        }
     });
 
     mainWindow.on('show', () => {
-        mainWindow.webContents.send('window-visibility-change', true);
+        if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send('window-visibility-change', true);
+        }
     });
 
     mainWindow.on('closed', () => {
@@ -743,8 +747,11 @@ app.on('will-quit', () => {
     }
 });
 
-ipcMain.on('osc-send', (event, { path, value }) => {
-    const oscPath = path.startsWith('/') ? path : `/${path}`;
+ipcMain.on('osc-send', (event, { path: oscPathInput, value }) => {
+    if (typeof oscPathInput !== 'string' || !oscPathInput) {
+        return;
+    }
+    const oscPath = oscPathInput.startsWith('/') ? oscPathInput : `/${oscPathInput}`;
     oscClient.send(oscPath, value, (err) => {
         if (err) console.error('[Electron] OSC Error:', err);
     });

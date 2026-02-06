@@ -256,18 +256,17 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
 					position: absolute;
 					top: 20px;
 					left: 20px;
-					background: rgba(18, 18, 24, 0.78);
-					backdrop-filter: blur(14px);
+					background: #16213e;
 					padding: 14px;
 					border-radius: 14px;
-					border: 1px solid rgba(255, 255, 255, 0.08);
+					border: 1px solid rgba(0, 212, 255, 0.15);
 					box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45);
 					z-index: 100;
 					width: 280px;
 					max-height: calc(100vh - 40px);
 					overflow-y: auto;
 					font-family: 'Inter', system-ui, sans-serif;
-					color: #eee;
+					color: #fff;
 					display: flex;
 					flex-direction: column;
 					gap: 12px;
@@ -276,40 +275,44 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
 					width: 8px;
 				}
 				.controls-panel::-webkit-scrollbar-thumb {
-					background: rgba(255, 255, 255, 0.18);
+					background: rgba(0, 212, 255, 0.25);
 					border-radius: 6px;
+				}
+				.controls-panel::-webkit-scrollbar-thumb:hover {
+					background: rgba(0, 212, 255, 0.4);
 				}
 				.panel-header {
 					display: flex;
 					flex-direction: column;
 					gap: 4px;
 					padding-bottom: 8px;
-					border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+					border-bottom: 1px solid rgba(0, 212, 255, 0.15);
 				}
 				.panel-title {
 					font-size: 14px;
 					font-weight: 700;
 					letter-spacing: 0.02em;
+					color: #00d4ff;
 				}
 				.panel-subtitle {
 					font-size: 11px;
-					color: rgba(255, 255, 255, 0.55);
+					color: rgba(255, 255, 255, 0.6);
 				}
 				.panel-section {
 					display: flex;
 					flex-direction: column;
 					gap: 10px;
 					padding: 10px;
-					background: rgba(28, 28, 36, 0.6);
+					background: rgba(15, 52, 96, 0.6);
 					border-radius: 10px;
-					border: 1px solid rgba(255, 255, 255, 0.06);
+					border: 1px solid rgba(0, 212, 255, 0.1);
 				}
 				.section-title {
 					font-size: 11px;
 					font-weight: 700;
 					text-transform: uppercase;
 					letter-spacing: 0.08em;
-					color: rgba(255, 255, 255, 0.6);
+					color: rgba(0, 212, 255, 0.7);
 				}
 				.section-body {
 					display: flex;
@@ -336,8 +339,8 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
 					gap: 8px;
 				}
 				.glass-select {
-					background: rgba(40, 40, 50, 0.5);
-					border: 1px solid rgba(255, 255, 255, 0.1);
+					background: #0f3460;
+					border: 1px solid rgba(0, 212, 255, 0.15);
 					border-radius: 6px;
 					padding: 8px 12px;
 					color: white;
@@ -347,16 +350,18 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
 					transition: all 0.2s ease;
 				}
 				.glass-select:hover {
-					border-color: rgba(255, 255, 255, 0.3);
-					background: rgba(50, 50, 60, 0.8);
+					border-color: rgba(0, 212, 255, 0.35);
+				}
+				.glass-select:focus {
+					border-color: rgba(0, 212, 255, 0.5);
 				}
 				.glass-select option {
-					background: #1a1a1f;
+					background: #16213e;
 					color: white;
 				}
 				.glass-input {
-					background: rgba(40, 40, 50, 0.5);
-					border: 1px solid rgba(255, 255, 255, 0.1);
+					background: #0f3460;
+					border: 1px solid rgba(0, 212, 255, 0.15);
 					border-radius: 6px;
 					padding: 8px 12px;
 					color: white;
@@ -365,26 +370,25 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
 					transition: all 0.2s ease;
 				}
 				.glass-input:focus {
-					border-color: rgba(100, 150, 255, 0.5);
-					background: rgba(50, 50, 60, 0.8);
+					border-color: rgba(0, 212, 255, 0.5);
 				}
 				.status-text {
 					font-size: 11px;
-					color: #9fc5ff;
+					color: rgba(0, 212, 255, 0.8);
 					margin-top: 4px;
 					line-height: 1.4;
 				}
 				.setup-button {
-					background: rgba(60, 180, 100, 0.5);
-					border-color: rgba(100, 255, 150, 0.3);
+					background: rgba(0, 212, 255, 0.2);
+					border-color: rgba(0, 212, 255, 0.3);
 				}
 				.setup-button:hover {
-					background: rgba(80, 200, 120, 0.7);
-					border-color: rgba(100, 255, 150, 0.5);
+					background: rgba(0, 212, 255, 0.35);
+					border-color: rgba(0, 212, 255, 0.5);
 				}
 				.glass-button {
-					background: rgba(60, 100, 180, 0.5);
-					border: 1px solid rgba(100, 150, 255, 0.3);
+					background: rgba(0, 212, 255, 0.15);
+					border: 1px solid rgba(0, 212, 255, 0.3);
 					border-radius: 6px;
 					padding: 9px 12px;
 					color: white;
@@ -394,53 +398,53 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
 					transition: all 0.2s ease;
 				}
 				.glass-button:hover {
-					background: rgba(80, 120, 200, 0.7);
-					border-color: rgba(100, 150, 255, 0.5);
+					background: rgba(0, 212, 255, 0.3);
+					border-color: rgba(0, 212, 255, 0.5);
 				}
 				.glass-button:active {
 					transform: scale(0.98);
 				}
 				.glass-button:disabled {
-					opacity: 0.6;
+					opacity: 0.5;
 					cursor: not-allowed;
 				}
 				.hand-calib-button {
-					background: rgba(100, 60, 180, 0.5);
-					border-color: rgba(150, 100, 255, 0.3);
+					background: rgba(0, 212, 255, 0.15);
+					border-color: rgba(0, 212, 255, 0.3);
 				}
 				.hand-calib-button:hover:not(:disabled) {
-					background: rgba(120, 80, 200, 0.7);
-					border-color: rgba(150, 100, 255, 0.5);
+					background: rgba(0, 212, 255, 0.3);
+					border-color: rgba(0, 212, 255, 0.5);
 				}
 				.reset-button {
-					background: rgba(180, 60, 60, 0.5);
-					border-color: rgba(255, 100, 100, 0.3);
+					background: rgba(233, 69, 96, 0.3);
+					border-color: rgba(233, 69, 96, 0.5);
 				}
 				.reset-button:hover {
-					background: rgba(200, 80, 80, 0.7);
-					border-color: rgba(255, 100, 100, 0.5);
+					background: rgba(233, 69, 96, 0.5);
+					border-color: rgba(233, 69, 96, 0.7);
 				}
 				.eye-calib-button {
-					background: rgba(60, 150, 180, 0.5);
-					border-color: rgba(100, 200, 255, 0.3);
+					background: rgba(0, 212, 255, 0.15);
+					border-color: rgba(0, 212, 255, 0.3);
 				}
 				.eye-calib-button:hover:not(:disabled) {
-					background: rgba(80, 170, 200, 0.7);
-					border-color: rgba(100, 200, 255, 0.5);
+					background: rgba(0, 212, 255, 0.3);
+					border-color: rgba(0, 212, 255, 0.5);
 				}
 				.neutral-calib-button {
-					background: rgba(100, 100, 100, 0.4);
-					border-color: rgba(150, 150, 150, 0.3);
+					background: rgba(0, 212, 255, 0.1);
+					border-color: rgba(0, 212, 255, 0.2);
 				}
 				.neutral-calib-button:hover:not(:disabled) {
-					background: rgba(120, 120, 120, 0.6);
+					background: rgba(0, 212, 255, 0.2);
 				}
 				.max-calib-button {
-					background: rgba(200, 80, 80, 0.4);
-					border-color: rgba(255, 100, 100, 0.3);
+					background: rgba(233, 69, 96, 0.25);
+					border-color: rgba(233, 69, 96, 0.4);
 				}
 				.max-calib-button:hover:not(:disabled) {
-					background: rgba(220, 100, 100, 0.6);
+					background: rgba(233, 69, 96, 0.4);
 				}
 				.checkbox-label, .toggle-container {
 					display: flex;
@@ -455,10 +459,10 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
 					width: 18px;
 					height: 18px;
 					cursor: pointer;
-					accent-color: rgba(100, 150, 255, 0.8);
+					accent-color: #00d4ff;
 				}
 				.debug-section {
-					background: rgba(24, 24, 34, 0.7);
+					background: rgba(15, 52, 96, 0.5);
 				}
 				.debug-grid {
 					display: flex;
@@ -470,19 +474,19 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
 					justify-content: space-between;
 					align-items: center;
 					padding: 4px 8px;
-					background: rgba(30, 30, 40, 0.4);
+					background: rgba(0, 212, 255, 0.05);
 					border-radius: 4px;
 					font-size: 11px;
 				}
 				.debug-item.viseme {
-					background: rgba(100, 60, 180, 0.2);
+					background: rgba(0, 212, 255, 0.1);
 				}
 				.blendshape-grid {
 					max-height: 200px;
 					overflow-y: auto;
 				}
 				.debug-item.blendshape {
-					background: rgba(60, 180, 120, 0.2);
+					background: rgba(0, 212, 255, 0.08);
 				}
 				.mode-toggle-container {
 					margin-top: 4px;
@@ -495,24 +499,24 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
 				.mode-button {
 					flex: 1;
 					min-width: 80px;
-					background: rgba(40, 40, 50, 0.6);
-					border: 1px solid rgba(255, 255, 255, 0.1);
+					background: rgba(15, 52, 96, 0.6);
+					border: 1px solid rgba(0, 212, 255, 0.1);
 					border-radius: 6px;
 					padding: 8px 6px;
-					color: #888;
+					color: rgba(255, 255, 255, 0.5);
 					font-size: 10px;
 					font-weight: 500;
 					cursor: pointer;
 					transition: all 0.2s ease;
 				}
 				.mode-button:hover {
-					background: rgba(60, 100, 180, 0.4);
-					border-color: rgba(100, 150, 255, 0.3);
+					background: rgba(0, 212, 255, 0.15);
+					border-color: rgba(0, 212, 255, 0.3);
 					color: #ccc;
 				}
 				.mode-button.active {
-					background: rgba(100, 60, 180, 0.6);
-					border-color: rgba(150, 100, 255, 0.5);
+					background: rgba(0, 212, 255, 0.25);
+					border-color: rgba(0, 212, 255, 0.5);
 					color: #fff;
 					font-weight: 600;
 				}
@@ -522,11 +526,11 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
 					color: rgba(255, 255, 255, 0.5);
 				}
 				.debug-label {
-					color: #aaa;
+					color: rgba(255, 255, 255, 0.6);
 					font-weight: 500;
 				}
 				.debug-value {
-					color: #fff;
+					color: #00d4ff;
 					font-family: 'Courier New', monospace;
 					font-weight: 600;
 				}

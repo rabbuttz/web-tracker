@@ -1,1100 +1,243 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import Webcam from 'react-webcam';
-import { type FaceLandmarkerResult, type HandLandmarkerResult } from '@mediapipe/tasks-vision';
-import { quat, vec3, mat3 } from 'gl-matrix';
-import { drawCanvas } from './utils/drawCanvas';
-import { WIDTH, HEIGHT, MIRROR_X, FACE_LM, HAND_LM, ARKIT_BLENDSHAPES, ARKIT_TO_UNIFIED_MAP } from './constants';
-import { poseFromHandLandmarks, poseFromFaceLandmarks } from './utils/trackingUtils';
+import { HEIGHT, WIDTH } from './constants';
 import { ControlPanel } from './components/ControlPanel';
+import { LoadingOverlay } from './components/LoadingOverlay';
+import { CalibrationCountdown } from './components/CalibrationCountdown';
+import { AutoHideNotice } from './components/AutoHideNotice';
 import { useMediaPipe } from './hooks/useMediaPipe';
 import { useThreeManager } from './hooks/useThreeManager';
+import { useCalibration } from './hooks/useCalibration';
+import { useCamera } from './hooks/useCamera';
+import { useTracking } from './hooks/useTracking';
+import type { AppLogLevel, ControlCommand, ExpressionMode } from './types/tracking';
 
-interface HandCalibration {
-  leftHandSize: number | null;
-  rightHandSize: number | null;
-  referenceDepth: number;
-}
-
-// Default calibration values (used when no saved calibration exists)
-const DEFAULT_HEAD_CALIBRATION = {
-  position: [0.4859048128128052, 0.48299509286880493, -0.04700769856572151] as [number, number, number],
-  quaternion: [-0.03367241099476814, -0.016153844073414803, 0.006220859009772539, 0.9992830157279968] as [number, number, number, number]
-};
-
-const DEFAULT_HAND_CALIBRATION = {
-  leftHandSize: 0.40479355842178694,
-  rightHandSize: 0.4208306103774612,
-  referenceDepth: 0.5
-};
-
-interface EyeCalibration {
-  openLeft: number;
-  openRight: number;
-  closedLeft: number;
-  closedRight: number;
-  frameCount: number;
-  leftBlink: BlinkHistory;
-  rightBlink: BlinkHistory;
-}
-
-interface BlinkHistory {
-  inBlink: boolean;
-  minSinceBlink: number;
-  openSamples: number[];
-}
-
-type ControlCommand =
-  | { type: 'calibrate'; target: 'head' | 'hand'; queuedAt?: number }
-  | { type: 'auto-calibrate'; enabled: boolean; queuedAt?: number };
-
-const BLINK_HISTORY_SIZE = 5;
 const CONTROL_POLL_INTERVAL_MS = 500;
-const CAMERA_RETRY_INTERVAL_MS = 3000;
 
-const createBlinkHistory = (): BlinkHistory => ({
-  inBlink: false,
-  minSinceBlink: Number.POSITIVE_INFINITY,
-  openSamples: []
-});
-
-declare global {
-  interface Window {
-    electronAPI: {
-      oscSend: (path: string, value: number | number[] | string) => void;
-      onWindowVisibilityChange: (callback: (isVisible: boolean) => void) => void;
-      onAutoHideNotice: (callback: (payload?: { durationMs?: number }) => void) => void;
-      log: (level: 'log' | 'info' | 'warn' | 'error', ...args: any[]) => void;
-      notifyTrackingStarted: () => void;
-    };
-  }
-}
-
-// Helper function to log to both console and Electron main process
-function appLog(level: 'log' | 'info' | 'warn' | 'error', ...args: any[]) {
+function appLog(level: AppLogLevel, ...args: unknown[]) {
   console[level](...args);
   if (window.electronAPI?.log) {
     window.electronAPI.log(level, ...args);
   }
 }
 
-function getMediaErrorName(error: unknown): string {
-  if (error instanceof DOMException) {
-    return error.name
-  }
-  if (error && typeof error === 'object' && 'name' in error) {
-    return String((error as { name?: unknown }).name ?? '')
-  }
-  return ''
-}
-
-function shouldRetryCameraAccess(error: unknown): boolean {
-  const errorName = getMediaErrorName(error)
-  return errorName !== 'NotAllowedError' && errorName !== 'SecurityError'
-}
-
 function App() {
-  const [devices, setDevices] = useState<MediaDeviceInfo[]>([])
-  const [selectedDeviceId, setSelectedDeviceId] = useState<string>('')
-  const [handCalibCountdown, setHandCalibCountdown] = useState<number | null>(null)
-  const [isLoading, setIsLoading] = useState<boolean>(true)
-  const [expressionMode, setExpressionMode] = useState<'visemeBlendshape' | 'blendshape'>('visemeBlendshape')
-  const [autoCalibrate, setAutoCalibrate] = useState<boolean>(true)
-  const [blinkSyncEnabled, setBlinkSyncEnabled] = useState<boolean>(false)
-  const [isWindowVisible, setIsWindowVisible] = useState<boolean>(true)
-  const [setupStatus, setSetupStatus] = useState<string>('')
-  const [cameraRetryNonce, setCameraRetryNonce] = useState<number>(0)
-  const [isCameraRetryActive, setIsCameraRetryActive] = useState<boolean>(false)
-  const [resoniteUsername, setResoniteUsername] = useState<string>(localStorage.getItem('resoniteUsername') || '')
-  const [resonitePort, setResonitePort] = useState<number>(Number(localStorage.getItem('resonitePort')) || 10534)
-  const [showAutoHideNotice, setShowAutoHideNotice] = useState<boolean>(false)
-  const [mouthDebug, setMouthDebug] = useState<{
-    nHeight: number;
-    nWidth: number;
-    aa: number;
-    ih: number;
-    ou: number;
-    E: number;
-    oh: number;
-  } | null>(null)
-
-  const [blendshapeDebug, setBlendshapeDebug] = useState<{ name: string; value: number }[] | null>(null)
-
+  const [isLoading, setIsLoading] = useState(true);
+  const [expressionMode, setExpressionMode] = useState<ExpressionMode>('visemeBlendshape');
+  const [autoCalibrate, setAutoCalibrate] = useState(true);
+  const [blinkSyncEnabled, setBlinkSyncEnabled] = useState(false);
+  const [isWindowVisible, setIsWindowVisible] = useState(true);
+  const [setupStatus, setSetupStatus] = useState('');
+  const [showAutoHideNotice, setShowAutoHideNotice] = useState(false);
+  const [resoniteUsername, setResoniteUsername] = useState(localStorage.getItem('resoniteUsername') || '');
+  const [resonitePort, setResonitePort] = useState<number>(Number(localStorage.getItem('resonitePort')) || 10534);
   const [videoElement, setVideoElement] = useState<HTMLVideoElement | null>(null);
-  const firstTrackingFrameRef = useRef<boolean>(false);
-  const controlPollErrorRef = useRef<number>(0);
+
+  const webcamRef = useRef<Webcam>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const threeCanvasRef = useRef<HTMLCanvasElement>(null);
+  const controlPollErrorRef = useRef(0);
   const autoHideNoticeTimerRef = useRef<number | null>(null);
 
-  const webcamRef = useRef<Webcam>(null)
-  const canvasRef = useRef<HTMLCanvasElement>(null)
-  const threeCanvasRef = useRef<HTMLCanvasElement>(null)
+  const threeStateRef = useThreeManager(threeCanvasRef.current);
+
+  const {
+    handCalibCountdown,
+    headPoseRef,
+    rawHeadPoseRef,
+    calibrationRef,
+    handCalibrationRef,
+    eyeCalibrationRef,
+    handleCalibrate,
+    handleHandCalibrate,
+    handleResetCalibration,
+    updateAutoCalibration
+  } = useCalibration();
+
+  const {
+    devices,
+    selectedDeviceId,
+    cameraRetryNonce,
+    selectDevice,
+    handleCameraStarted,
+    handleCameraError
+  } = useCamera(appLog);
+
+  const { processResults, handResultsRef, mouthDebug, blendshapeDebug } = useTracking({
+    canvasRef,
+    threeStateRef,
+    videoElement,
+    isWindowVisible,
+    expressionMode,
+    blinkSyncEnabled,
+    autoCalibrate,
+    headPoseRef,
+    rawHeadPoseRef,
+    calibrationRef,
+    handCalibrationRef,
+    eyeCalibrationRef,
+    updateAutoCalibration,
+    log: appLog
+  });
 
   const handleWebcamRef = useCallback((node: Webcam | null) => {
     webcamRef.current = node;
-    if (node && node.video) {
+    if (node?.video) {
       setVideoElement(node.video);
     }
   }, []);
-
-  const handResultsRef = useRef<HandLandmarkerResult | null>(null)
-  const faceResultsRef = useRef<FaceLandmarkerResult | null>(null)
-  const headPoseRef = useRef<{ position: vec3; quaternion: quat } | null>(null)
-  const calibrationRef = useRef<{ position: vec3; quaternion: quat } | null>(null)
-  const rawHeadPoseRef = useRef<{ position: vec3; quaternion: quat } | null>(null)
-  const handCalibrationRef = useRef<HandCalibration>({
-    leftHandSize: null,
-    rightHandSize: null,
-    referenceDepth: 0.5
-  })
-
-  const eyeCalibrationRef = useRef<EyeCalibration>({
-    openLeft: 1.0,
-    openRight: 1.0,
-    closedLeft: 0.0,
-    closedRight: 0.0,
-    frameCount: 0,
-    leftBlink: createBlinkHistory(),
-    rightBlink: createBlinkHistory()
-  })
-
-  const detectedBlendshapeNamesRef = useRef<Set<string>>(new Set())
-  const debugUpdateCounterRef = useRef(0)
-  const expressionModeRef = useRef<'visemeBlendshape' | 'blendshape'>(expressionMode)
-  const blinkSyncEnabledRef = useRef<boolean>(blinkSyncEnabled)
-
-  // Auto-calibration refs
-  const lastHeadPoseRef = useRef<{ position: vec3; quaternion: quat } | null>(null)
-  const stillTimeRef = useRef<number>(0)
-  const lastUpdateTimeRef = useRef<number>(Date.now())
-  const isTransitioningRef = useRef<boolean>(false)
-  const targetCalibrationRef = useRef<{ position: vec3; quaternion: quat } | null>(null)
-  const transitionStartRef = useRef<{ position: vec3; quaternion: quat } | null>(null)
-  const transitionProgressRef = useRef<number>(0)
-  const AUTO_CALIBRATE_THRESHOLD_MS = 5000
-  const TRANSITION_DURATION_MS = 5000
-  const POSITION_THRESHOLD = 0.01
-  const ROTATION_THRESHOLD = 0.02
-
-  // Keep expressionModeRef in sync with state
-  useEffect(() => {
-    expressionModeRef.current = expressionMode
-  }, [expressionMode])
-
-  // Keep blink sync ref in sync with state
-  useEffect(() => {
-    blinkSyncEnabledRef.current = blinkSyncEnabled
-  }, [blinkSyncEnabled])
-
-  const threeStateRef = useThreeManager(threeCanvasRef.current)
-
-  const formatVec = (v: number[]) => `[${v.map(n => n.toFixed(4)).join(';')}]`
-
-  const calculateHandSize = (landmarks: { x: number; y: number; z: number }[]) => {
-    const wrist = landmarks[HAND_LM.WRIST]
-    const middleTip = landmarks[HAND_LM.MIDDLE_TIP]
-    const dx = middleTip.x - wrist.x
-    const dy = middleTip.y - wrist.y
-    return Math.sqrt(dx * dx + dy * dy)
-  }
-
-  const handleHandCalibrate = useCallback(() => {
-    setHandCalibCountdown(3)
-    const interval = setInterval(() => {
-      setHandCalibCountdown(prev => {
-        if (prev === null || prev <= 1) {
-          clearInterval(interval)
-          const results = handResultsRef.current
-          if (results?.landmarks && results.handedness) {
-            for (let i = 0; i < results.landmarks.length; i++) {
-              const lm = results.landmarks[i]
-              const rawLabel = results.handedness[i]?.[0]?.categoryName
-              const label = MIRROR_X
-                ? (rawLabel === 'Left' ? 'Right' : rawLabel === 'Right' ? 'Left' : rawLabel)
-                : rawLabel
-              const handSize = calculateHandSize(lm)
-              if (label === 'Left') {
-                handCalibrationRef.current.leftHandSize = handSize
-              } else if (label === 'Right') {
-                handCalibrationRef.current.rightHandSize = handSize
-              }
-            }
-            localStorage.setItem('handCalibration', JSON.stringify(handCalibrationRef.current))
-          }
-          return null
-        }
-        return prev - 1
-      })
-    }, 1000)
-  }, [])
-
-  const handleCalibrate = useCallback(() => {
-    if (rawHeadPoseRef.current) {
-      calibrationRef.current = {
-        position: vec3.clone(rawHeadPoseRef.current.position),
-        quaternion: quat.clone(rawHeadPoseRef.current.quaternion)
-      }
-      localStorage.setItem('headCalibration', JSON.stringify({
-        position: Array.from(calibrationRef.current.position),
-        quaternion: Array.from(calibrationRef.current.quaternion)
-      }))
-    }
-  }, [])
-
 
   const handleSetupFacetrack = useCallback(async () => {
     if (!resoniteUsername) {
       setSetupStatus('Error: Username required');
       return;
     }
+
     setSetupStatus('Setting up FaceTrack...');
     try {
-      const response = await fetch(`http://localhost:3000/setup-facetrack?username=${encodeURIComponent(resoniteUsername)}&port=${resonitePort}`);
+      const response = await fetch(
+        `http://localhost:3000/setup-facetrack?username=${encodeURIComponent(resoniteUsername)}&port=${resonitePort}`
+      );
       const text = await response.text();
       setSetupStatus(text);
       appLog('info', `Setup result: ${text}`);
     } catch (error) {
-      const msg = error instanceof Error ? error.message : String(error);
-      setSetupStatus(`Error: ${msg}`);
-      appLog('error', `Setup failed: ${msg}`);
+      const message = error instanceof Error ? error.message : String(error);
+      setSetupStatus(`Error: ${message}`);
+      appLog('error', `Setup failed: ${message}`);
     }
-  }, [resoniteUsername, resonitePort]);
+  }, [resonitePort, resoniteUsername]);
 
-  const handleSetMode = useCallback((mode: 'visemeBlendshape' | 'blendshape') => {
-    setExpressionMode(mode)
-    localStorage.setItem('expressionMode', mode)
-    appLog('info', `Expression mode saved: ${mode}`)
-  }, [])
+  const handleSetMode = useCallback((mode: ExpressionMode) => {
+    setExpressionMode(mode);
+    localStorage.setItem('expressionMode', mode);
+    appLog('info', `Expression mode saved: ${mode}`);
+  }, []);
 
-  const handleResetCalibration = useCallback(() => {
-    calibrationRef.current = null
-    handCalibrationRef.current = {
-      leftHandSize: null,
-      rightHandSize: null,
-      referenceDepth: 0.5
+  useEffect(() => {
+    const savedExpressionMode = localStorage.getItem('expressionMode');
+    if (savedExpressionMode === 'visemeBlendshape' || savedExpressionMode === 'blendshape') {
+      setExpressionMode(savedExpressionMode);
+      appLog('info', `Loaded expression mode: ${savedExpressionMode}`);
     }
-    localStorage.removeItem('headCalibration')
-    localStorage.removeItem('handCalibration')
-  }, [])
 
-  const sendParam = useCallback((path: string, values: number[]) => {
-    if (window.electronAPI) {
-      let val: number | string;
-      if (path.includes('Rotation') || path.includes('Position')) {
-        val = formatVec(values);
-      } else {
-        val = values.length === 1 ? values[0] : formatVec(values);
-      }
-      window.electronAPI.oscSend(path, val);
+    const savedAutoCalibrate = localStorage.getItem('autoCalibrate');
+    if (savedAutoCalibrate !== null) {
+      setAutoCalibrate(savedAutoCalibrate === 'true');
+      appLog('info', `Loaded auto calibrate: ${savedAutoCalibrate}`);
+    }
+
+    const savedBlinkSync = localStorage.getItem('blinkSyncEnabled');
+    if (savedBlinkSync !== null) {
+      setBlinkSyncEnabled(savedBlinkSync === 'true');
+      appLog('info', `Blink sync: ${savedBlinkSync}`);
     }
   }, []);
 
-  const processResults = useCallback((faceResults: FaceLandmarkerResult | null, handResults: HandLandmarkerResult | null) => {
-    faceResultsRef.current = faceResults
-    handResultsRef.current = handResults
-
-    // Log first successful tracking frame
-    if (!firstTrackingFrameRef.current && (faceResults?.faceLandmarks?.length || handResults?.landmarks?.length)) {
-      firstTrackingFrameRef.current = true;
-      appLog('info', 'Tracking started - first frame processed successfully');
-      if (faceResults?.faceLandmarks?.length) {
-        appLog('info', '  ✓ Face detected');
-      }
-      if (handResults?.landmarks?.length) {
-        appLog('info', `  ✓ ${handResults.landmarks.length} hand(s) detected`);
-      }
-      // Notify Electron that tracking has started successfully
-      if (window.electronAPI?.notifyTrackingStarted) {
-        window.electronAPI.notifyTrackingStarted();
-      }
-    }
-
-    // Throttle debug UI updates to every 5 frames to reduce React re-renders
-    debugUpdateCounterRef.current = (debugUpdateCounterRef.current + 1) % 5
-    const shouldUpdateDebug = debugUpdateCounterRef.current === 0
-
-    // Skip rendering when window is hidden to save resources
-    if (isWindowVisible) {
-      const canvasCtx = canvasRef.current?.getContext('2d')
-      if (canvasCtx) {
-        if (videoElement && videoElement.readyState >= 2) {
-          drawCanvas(canvasCtx, handResults || undefined, faceResults || undefined, videoElement)
-        } else {
-          // Fallback: draw a dark background when video is not ready
-          canvasCtx.fillStyle = '#16161a'
-          canvasCtx.fillRect(0, 0, WIDTH, HEIGHT)
-          canvasCtx.fillStyle = '#666'
-          canvasCtx.font = '20px sans-serif'
-          canvasCtx.textAlign = 'center'
-          canvasCtx.fillText('Waiting for camera...', WIDTH / 2, HEIGHT / 2)
-        }
-      }
-    }
-
-    const st = threeStateRef.current
-    if (!st) return
-
-    // Process hand results
-    if (handResults?.landmarks) {
-      const hands2d = handResults.landmarks
-      const hands3d = handResults.worldLandmarks ?? []
-      const handedness = handResults.handedness ?? []
-
-      const detectedHands = new Set<string>();
-
-      for (let hi = 0; hi < st.handGizmos.length; hi++) {
-        const gizmo = st.handGizmos[hi]
-        const lm2d = hands2d[hi]
-        const rawLabel = handedness[hi]?.[0]?.categoryName
-        const label = MIRROR_X
-          ? (rawLabel === 'Left' ? 'Right' : rawLabel === 'Right' ? 'Left' : rawLabel)
-          : rawLabel
-        const suffix = label === 'Left' ? 'L' : label === 'Right' ? 'R' : (hi === 0 ? 'L' : 'R')
-
-        if (!lm2d || lm2d.length === 0 || !lm2d[0]) {
-          gizmo.visible = false
-          continue
-        }
-        gizmo.visible = true
-        detectedHands.add(suffix);
-
-        const wrist2d = lm2d[0]
-        const x = (MIRROR_X ? 1 - wrist2d.x : wrist2d.x) * WIDTH
-        const y = (1 - wrist2d.y) * HEIGHT
-
-        const currentHandSize = calculateHandSize(lm2d)
-        const calibHandSize = label === 'Left'
-          ? handCalibrationRef.current.leftHandSize
-          : handCalibrationRef.current.rightHandSize
-        let z: number
-        if (calibHandSize) {
-          const depthRatio = calibHandSize / currentHandSize
-          z = -(handCalibrationRef.current.referenceDepth * depthRatio) * 300
-        } else {
-          z = -wrist2d.z * 300
-        }
-
-        // Only update gizmo visuals when window is visible
-        if (isWindowVisible) {
-          gizmo.position.set(x, y, z)
-        }
-
-        const lmForRot = hands3d[hi]?.map(p => ({ x: p.x, y: p.y, z: p.z }))
-          ?? lm2d.map(p => ({ x: p.x, y: p.y, z: p.z }))
-        const rotLabel = label ?? (hi === 0 ? 'Left' : 'Right')
-
-        const { quaternion } = poseFromHandLandmarks(lmForRot, rotLabel)
-
-        // Only update gizmo visuals when window is visible
-        if (isWindowVisible) {
-          gizmo.quaternion.set(quaternion[0], quaternion[1], quaternion[2], quaternion[3])
-        }
-
-        const positionPath = `/avatar/parameters/Hand.${suffix}.Position`
-        const rotationPath = `/avatar/parameters/Hand.${suffix}.Rotation`
-        const detectedPath = `/avatar/parameters/Hand.${suffix}.Detected`
-
-        const normX = MIRROR_X ? 1 - wrist2d.x : wrist2d.x
-        const normY = 1 - wrist2d.y
-        let normZ: number
-        if (calibHandSize) {
-          const depthRatio = calibHandSize / currentHandSize
-          normZ = handCalibrationRef.current.referenceDepth * depthRatio
-        } else {
-          normZ = wrist2d.z
-        }
-
-        const headPose = headPoseRef.current
-        if (headPose) {
-          const relX = normX - headPose.position[0]
-          const relY = normY - headPose.position[1]
-          const relZ = normZ - headPose.position[2]
-          sendParam(positionPath, [relX, relY, relZ])
-        } else {
-          sendParam(positionPath, [normX, normY, normZ])
-        }
-        sendParam(rotationPath, [quaternion[0], quaternion[1], quaternion[2], quaternion[3]])
-        sendParam(detectedPath, [1])
-      }
-
-      ['L', 'R'].forEach(s => {
-        if (!detectedHands.has(s)) {
-          sendParam(`/avatar/parameters/Hand.${s}.Detected`, [0])
-        }
-      })
-    }
-
-    // Process face results
-    if (faceResults?.faceLandmarks && faceResults.faceLandmarks.length > 0) {
-      const lms = faceResults.faceLandmarks[0]
-      st.faceGizmo.visible = true
-
-      // Use 2D landmarks for position to keep the gizmo aligned to the video frame
-      const nose = lms[FACE_LM.NOSE]
-      const leftEye = lms[FACE_LM.LEFT_EYE_CORNER]
-      const rightEye = lms[FACE_LM.RIGHT_EYE_CORNER]
-      const position = vec3.fromValues(
-        (nose.x + leftEye.x + rightEye.x) / 3,
-        (nose.y + leftEye.y + rightEye.y) / 3,
-        nose.z
-      )
-
-      let quaternion: quat
-      const matrix = faceResults.facialTransformationMatrixes?.[0]
-
-      if (matrix?.data) {
-        const m = matrix.data
-        // Extract rotation from column-major 4x4 matrix
-        const rotMatrix = mat3.fromValues(
-          m[0], m[1], m[2],
-          m[4], m[5], m[6],
-          m[8], m[9], m[10]
-        )
-        quaternion = quat.normalize(quat.create(), quat.fromMat3(quat.create(), rotMatrix))
-      } else {
-        // Fallback to landmark-based calculation
-        const pose = poseFromFaceLandmarks(lms)
-        quaternion = pose.quaternion
-      }
-
-      // Convert to screen coordinates
-      const gizmoX = (MIRROR_X ? 1 - position[0] : position[0]) * WIDTH
-      const gizmoY = (1 - position[1]) * HEIGHT
-      const gizmoZ = -position[2] * 300
-
-      // Only update gizmo visuals when window is visible
-      if (isWindowVisible) {
-        st.faceGizmo.position.set(gizmoX, gizmoY, gizmoZ)
-        st.faceGizmo.quaternion.set(quaternion[0], quaternion[1], quaternion[2], quaternion[3])
-      }
-
-      // For OSC output, use normalized coordinates
-      const normX = MIRROR_X ? 1 - position[0] : position[0]
-      const normY = 1 - position[1]
-      const normZ = position[2]
-
-      const rawPos = vec3.fromValues(normX, normY, normZ)
-      const rawQuat = quat.clone(quaternion)
-
-      rawHeadPoseRef.current = { position: rawPos, quaternion: rawQuat }
-      headPoseRef.current = { position: vec3.clone(rawPos), quaternion: quat.clone(rawQuat) }
-
-      // Auto-calibration logic
-      if (autoCalibrate) {
-        const now = Date.now()
-        const deltaTime = now - lastUpdateTimeRef.current
-        lastUpdateTimeRef.current = now
-
-        if (lastHeadPoseRef.current) {
-          const posChange = vec3.distance(rawPos, lastHeadPoseRef.current.position)
-          const quatChange = Math.abs(1 - Math.abs(quat.dot(rawQuat, lastHeadPoseRef.current.quaternion)))
-
-          // Check if moving during transition
-          if (isTransitioningRef.current && (posChange >= POSITION_THRESHOLD || quatChange >= ROTATION_THRESHOLD)) {
-            // Cancel transition
-            isTransitioningRef.current = false
-            targetCalibrationRef.current = null
-            transitionStartRef.current = null
-            transitionProgressRef.current = 0
-            stillTimeRef.current = 0
-          }
-
-          // Update transition progress
-          if (isTransitioningRef.current && targetCalibrationRef.current && transitionStartRef.current) {
-            transitionProgressRef.current += deltaTime / TRANSITION_DURATION_MS
-
-            if (transitionProgressRef.current >= 1.0) {
-              // Transition complete
-              calibrationRef.current = {
-                position: vec3.clone(targetCalibrationRef.current.position),
-                quaternion: quat.clone(targetCalibrationRef.current.quaternion)
-              }
-              localStorage.setItem('headCalibration', JSON.stringify({
-                position: Array.from(calibrationRef.current.position),
-                quaternion: Array.from(calibrationRef.current.quaternion)
-              }))
-              isTransitioningRef.current = false
-              targetCalibrationRef.current = null
-              transitionStartRef.current = null
-              transitionProgressRef.current = 0
-            } else {
-              // Interpolate calibration
-              const t = Math.min(1.0, transitionProgressRef.current)
-              const smoothT = t * t * (3 - 2 * t) // Smoothstep
-
-              calibrationRef.current = {
-                position: vec3.lerp(vec3.create(), transitionStartRef.current.position, targetCalibrationRef.current.position, smoothT),
-                quaternion: quat.slerp(quat.create(), transitionStartRef.current.quaternion, targetCalibrationRef.current.quaternion, smoothT)
-              }
-            }
-          }
-
-          // Detect stillness and start transition
-          if (!isTransitioningRef.current) {
-            if (posChange < POSITION_THRESHOLD && quatChange < ROTATION_THRESHOLD) {
-              stillTimeRef.current += deltaTime
-              if (stillTimeRef.current >= AUTO_CALIBRATE_THRESHOLD_MS) {
-                // Start transition
-                isTransitioningRef.current = true
-                // Use full rotation for calibration (all axes including X and Y)
-                targetCalibrationRef.current = {
-                  position: vec3.clone(rawPos),
-                  quaternion: quat.clone(rawQuat)
-                }
-                transitionStartRef.current = calibrationRef.current ? {
-                  position: vec3.clone(calibrationRef.current.position),
-                  quaternion: quat.clone(calibrationRef.current.quaternion)
-                } : {
-                  position: vec3.clone(rawPos),
-                  quaternion: quat.create()
-                }
-                transitionProgressRef.current = 0
-                stillTimeRef.current = 0
-              }
-            } else {
-              stillTimeRef.current = 0
-            }
-          }
-        }
-        lastHeadPoseRef.current = { position: vec3.clone(rawPos), quaternion: quat.clone(rawQuat) }
-      }
-
-      let outPos = rawPos
-      let outQuat = rawQuat
-      if (calibrationRef.current) {
-        outPos = vec3.sub(vec3.create(), rawPos, calibrationRef.current.position)
-        const calibQuatInv = quat.invert(quat.create(), calibrationRef.current.quaternion)
-        outQuat = quat.multiply(quat.create(), calibQuatInv, rawQuat)
-        quat.normalize(outQuat, outQuat)
-      }
-
-      sendParam('/avatar/parameters/Head.Position', [outPos[0], outPos[1], outPos[2]])
-      // Swap Y and Z components for Resonite coordinate system, negate Z (roll) to fix direction
-      sendParam('/avatar/parameters/Head.Rotation', [outQuat[0], -outQuat[2], outQuat[1], outQuat[3]])
-      sendParam('Head.Rotation', [outQuat[0], -outQuat[2], outQuat[1], outQuat[3]])
-
-      // Mouth and Viseme / Blendshapes calculation
-      const upper = lms[FACE_LM.LIP_UPPER]
-      const lower = lms[FACE_LM.LIP_LOWER]
-      const mLeft = lms[FACE_LM.MOUTH_LEFT]
-      const mRight = lms[FACE_LM.MOUTH_RIGHT]
-      const forehead = lms[FACE_LM.FOREHEAD]
-      const chin = lms[FACE_LM.CHIN]
-      // leftEye and rightEye are already declared above for position calculation
-
-      const faceHeight = Math.abs(chin.y - forehead.y)
-      const mouthHeight = Math.abs(lower.y - upper.y)
-      const mouthWidth = Math.abs(mRight.x - mLeft.x)
-      const eyeDist = Math.abs(rightEye.x - leftEye.x)
-
-      const nHeight = mouthHeight / faceHeight
-      const nWidth = mouthWidth / eyeDist
-
-      const mouthOpen = Math.max(0.0001, Math.min(1.0, nHeight / 0.2))
-      sendParam('/avatar/parameters/MouthOpen', [mouthOpen])
-
-      const blendshapes = faceResults.faceBlendshapes?.[0]?.categories
-      const getBlendshapeValue = (name: string) => {
-        if (!blendshapes) return 0
-        const bs = blendshapes.find(b => b.categoryName === name)
-        return bs?.score ?? 0
-      }
-
-      // Auto-calibrating blink normalization
-      // Track open values from the last few blinks to stabilize "fully open"
-      const normalizeBlinkValue = (rawValue: number, side: 'left' | 'right') => {
-        const calib = eyeCalibrationRef.current
-
-        // Update calibration with current observation
-        calib.frameCount++
-
-        const isLeft = side === 'left'
-        if (!calib.leftBlink) {
-          calib.leftBlink = createBlinkHistory()
-        }
-        if (!calib.rightBlink) {
-          calib.rightBlink = createBlinkHistory()
-        }
-        const blink = isLeft ? calib.leftBlink : calib.rightBlink
-        const getOpen = () => (isLeft ? calib.openLeft : calib.openRight)
-        const getClosed = () => (isLeft ? calib.closedLeft : calib.closedRight)
-        const setOpen = (value: number) => {
-          if (isLeft) {
-            calib.openLeft = value
-          } else {
-            calib.openRight = value
-          }
-        }
-        const setClosed = (value: number) => {
-          if (isLeft) {
-            calib.closedLeft = value
-          } else {
-            calib.closedRight = value
-          }
-        }
-
-        // Track maximum (closed eyes) - update if we see a higher value
-        if (rawValue > getClosed()) {
-          setClosed(rawValue)
-        }
-
-        const openBase = getOpen()
-        const closedBase = getClosed()
-        const baseRange = closedBase - openBase
-        const hasRange = baseRange > 0.05
-        const closeThreshold = hasRange ? openBase + baseRange * 0.6 : 0.4
-        const openThreshold = hasRange ? openBase + baseRange * 0.3 : 0.2
-
-        if (!blink.inBlink) {
-          if (!Number.isFinite(blink.minSinceBlink)) {
-            blink.minSinceBlink = rawValue
-          } else if (rawValue < blink.minSinceBlink) {
-            blink.minSinceBlink = rawValue
-          }
-
-          if (rawValue >= closeThreshold) {
-            if (Number.isFinite(blink.minSinceBlink)) {
-              blink.openSamples.push(blink.minSinceBlink)
-              if (blink.openSamples.length > BLINK_HISTORY_SIZE) {
-                blink.openSamples.shift()
-              }
-            }
-            blink.inBlink = true
-          }
-        } else if (rawValue <= openThreshold) {
-          blink.inBlink = false
-          blink.minSinceBlink = rawValue
-        }
-
-        if (blink.openSamples.length > 0) {
-          const sum = blink.openSamples.reduce((acc, value) => acc + value, 0)
-          let avgOpen = sum / blink.openSamples.length
-          if (getClosed() > 0.05) {
-            avgOpen = Math.min(avgOpen, getClosed() - 0.02)
-          }
-          setOpen(avgOpen)
-        } else if (rawValue < getOpen()) {
-          setOpen(rawValue)
-        }
-
-        // Slowly drift minimum upward to adapt to lighting changes (every ~10 seconds at 30fps)
-        if (calib.frameCount % 300 === 0 && blink.openSamples.length === 0 && getOpen() < getClosed() * 0.5) {
-          setOpen(getOpen() * 0.95 + getClosed() * 0.05 * 0.3)
-        }
-
-        // Ignore extreme noise for output (clamping)
-        if (rawValue < 0.001) {
-          return 0
-        }
-
-        const openVal = getOpen()
-        const closedVal = getClosed()
-
-        // Calculate range - use 75% of observed max as "fully closed" threshold
-        // This makes it easier to fully close eyes without requiring extreme values
-        const effectiveClosedVal = openVal + (closedVal - openVal) * 0.75
-        const range = effectiveClosedVal - openVal
-
-        // If range is too small, not enough data yet - return raw value
-        if (range < 0.05) {
-          return rawValue
-        }
-
-        // Normalize: 0 = open, 1 = closed
-        const normalized = (rawValue - openVal) / range
-        return Math.max(0, Math.min(1, normalized))
-      }
-
-      const rawBlinkLeft = getBlendshapeValue('eyeBlinkLeft')
-      const rawBlinkRight = getBlendshapeValue('eyeBlinkRight')
-      let eyeBlinkLeft = normalizeBlinkValue(rawBlinkLeft, 'left')
-      let eyeBlinkRight = normalizeBlinkValue(rawBlinkRight, 'right')
-      if (blinkSyncEnabledRef.current) {
-        const synced = (eyeBlinkLeft + eyeBlinkRight) * 0.5
-        eyeBlinkLeft = synced
-        eyeBlinkRight = synced
-      }
-
-      if (expressionModeRef.current === 'blendshape') {
-        // Perfect Sync Mode: Calculate aiueo from blendshapes and send to legacy paths
-        // ここはまだ実装途中 by tatsuさん なので、今は一旦コメントアウトしてるだけなので指示があるまでは勝手に消さないで
-        // const mouthDimpleLeft = getBlendshapeValue('mouthDimpleLeft')
-        // const mouthDimpleRight = getBlendshapeValue('mouthDimpleRight')
-
-        // Send all 52 ARKit blendshapes + corresponding Unified names
-        // Using /avatar/parameters/FT/v2/ prefix
-        ARKIT_BLENDSHAPES.forEach(shapeName => {
-          let value = getBlendshapeValue(shapeName);
-
-          // Apply eye calibration for blink values (optionally synced)
-          if (shapeName === 'eyeBlinkLeft') {
-            value = eyeBlinkLeft
-          } else if (shapeName === 'eyeBlinkRight') {
-            value = eyeBlinkRight
-          }
-
-          // ARKit名で送信
-          sendParam(`/avatar/parameters/FT/v2/${shapeName}`, [value]);
-          // 対応するUnified名でも送信
-          const unifiedName = ARKIT_TO_UNIFIED_MAP[shapeName];
-          if (unifiedName) {
-            sendParam(`/avatar/parameters/FT/v2/${unifiedName}`, [value]);
-          }
-        });
-
-        // Suppress visemes in Perfect Sync mode to prevent interference
-        sendParam('/avatar/parameters/aa', [0.0001])
-        sendParam('/avatar/parameters/ih', [0.0001])
-        sendParam('/avatar/parameters/ou', [0.0001])
-        sendParam('/avatar/parameters/E', [0.0001])
-        sendParam('/avatar/parameters/oh', [0.0001])
-
-        if (blendshapes) {
-          // Update blendshape debug display - remember names that exceeded threshold
-          blendshapes.forEach(bs => {
-            if (bs.score > 0.001) {
-              detectedBlendshapeNamesRef.current.add(bs.categoryName)
-            }
-          })
-
-          // Show all remembered blendshapes with current values (alphabetically sorted)
-          // Skip debug UI updates when window is hidden
-          if (isWindowVisible && shouldUpdateDebug) {
-            const allDetectedBlendshapes = Array.from(detectedBlendshapeNamesRef.current)
-              .map(name => {
-                const bs = blendshapes.find(b => b.categoryName === name)
-                return { name, value: bs?.score ?? 0 }
-              })
-              .sort((a, b) => a.name.localeCompare(b.name))
-            setBlendshapeDebug(allDetectedBlendshapes)
-          }
-        }
-      } else {
-        // Viseme (Blendshape-based): Calculate aiueo from blendshapes
-        const jawOpen = getBlendshapeValue('jawOpen')
-        const mouthPucker = getBlendshapeValue('mouthPucker')
-        const mouthFunnel = getBlendshapeValue('mouthFunnel')
-        const mouthSmileLeft = getBlendshapeValue('mouthSmileLeft')
-        const mouthSmileRight = getBlendshapeValue('mouthSmileRight')
-        const mouthStretchLeft = getBlendshapeValue('mouthStretchLeft')
-        const mouthStretchRight = getBlendshapeValue('mouthStretchRight')
-        const mouthLowerDown = getBlendshapeValue('mouthLowerDownLeft') + getBlendshapeValue('mouthLowerDownRight')
-        const mouthUpperUp = getBlendshapeValue('mouthUpperUpLeft') + getBlendshapeValue('mouthUpperUpRight')
-
-        // Calculate aiueo from blendshapes
-        // mouthOpenness: Use normalized mouth height (actual lip separation) as the gate.
-        // This prevents activation when the jaw moves while the lips are still closed.
-        const mouthOpenGate = Math.min(1.0, nHeight / 0.04)
-
-        // aa (あ): primarily jaw open
-        let v_aa = Math.max(0, jawOpen * 1.5 - 0.1) * mouthOpenGate
-
-        // ih (い): wide smile/stretch
-        const smileAmount = (mouthSmileLeft + mouthSmileRight) * 0.5 + (mouthStretchLeft + mouthStretchRight) * 0.5
-        let v_ih = Math.max(0, smileAmount * 1.3 - 0.1) * mouthOpenGate
-
-        // ou (う): pucker/funnel
-        const puckerAmount = mouthPucker * 0.7 + mouthFunnel * 0.3
-        let v_ou = Math.max(0, puckerAmount * 1.0 - 0.3) * mouthOpenGate
-        // E (え): mouth open with horizontal stretch (between あ and い)
-        const lipOpen = (mouthLowerDown + mouthUpperUp) * 0.5
-        const eStretch = (mouthStretchLeft + mouthStretchRight) * 0.5
-        const eSmile = (mouthSmileLeft + mouthSmileRight) * 0.3
-        let v_E = Math.min(1.0, Math.max(0, lipOpen + eStretch + eSmile + jawOpen * 0.6) * 1.5) * mouthOpenGate
-
-        // oh (お): jaw open + moderate pucker
-        let v_oh = Math.max(0, (jawOpen * 0.8 + mouthPucker * 0.4) - 0.25) * 1.0 * mouthOpenGate
-
-        // Softmax-style normalization: sum to 1.0, emphasize the dominant viseme
-        const rawValues = [v_aa, v_ih, v_ou, v_E, v_oh]
-        const sum = rawValues.reduce((a, b) => a + b, 0)
-
-        if (sum > 1.5) {
-          // Normalize only when sum exceeds 1.5
-          const scale = 1.5 / sum
-          v_aa *= scale
-          v_ih *= scale
-          v_ou *= scale
-          v_E *= scale
-          v_oh *= scale
-        } else if (sum <= 0.01) {
-          // Mouth is closed - explicitly set all to 0.0001
-          v_aa = 0.0001
-          v_ih = 0.0001
-          v_ou = 0.0001
-          v_E = 0.0001
-          v_oh = 0.0001
-        }
-
-        // Clamp and validate - use 0.0001 as minimum to ensure receiver updates
-        v_aa = isNaN(v_aa) ? 0.0001 : Math.max(0.0001, Math.min(1.0, v_aa))
-        v_ih = isNaN(v_ih) ? 0.0001 : Math.max(0.0001, Math.min(1.0, v_ih))
-        v_ou = isNaN(v_ou) ? 0.0001 : Math.max(0.0001, Math.min(1.0, v_ou))
-        v_E = isNaN(v_E) ? 0.0001 : Math.max(0.0001, Math.min(1.0, v_E))
-        v_oh = isNaN(v_oh) ? 0.0001 : Math.max(0.0001, Math.min(1.0, v_oh))
-        sendParam('/avatar/parameters/aa', [v_aa])
-        sendParam('/avatar/parameters/ih', [v_ih])
-        sendParam('/avatar/parameters/ou', [v_ou])
-        sendParam('/avatar/parameters/E', [v_E])
-        sendParam('/avatar/parameters/oh', [v_oh])
-
-        // Also send blendshapes for additional expression detail
-        // EyeClosed uses ARKit path for compatibility with FaceTrack setup
-        sendParam('/avatar/parameters/FT/v2/EyeClosedLeft', [eyeBlinkLeft])
-        sendParam('/avatar/parameters/FT/v2/EyeClosedRight', [eyeBlinkRight])
-        // Legacy paths for backward compatibility
-        sendParam('/avatar/parameters/Blendshapes/EyeBlinkLeft', [eyeBlinkLeft])
-        sendParam('/avatar/parameters/Blendshapes/EyeBlinkRight', [eyeBlinkRight])
-        sendParam('/avatar/parameters/Blendshapes/BrowInnerUp', [getBlendshapeValue('browInnerUp')])
-        sendParam('/avatar/parameters/Blendshapes/CheekPuff', [getBlendshapeValue('cheekPuff')])
-
-        // Skip debug UI updates when window is hidden
-        if (isWindowVisible && shouldUpdateDebug) {
-          setMouthDebug({
-            nHeight,
-            nWidth,
-            aa: v_aa,
-            ih: v_ih,
-            ou: v_ou,
-            E: v_E,
-            oh: v_oh
-          })
-        }
-      }
-      sendParam('/avatar/parameters/Head.Detected', [1])
-    } else {
-      st.faceGizmo.visible = false
-      sendParam('/avatar/parameters/Head.Detected', [0])
-      sendParam('/avatar/parameters/MouthOpen', [0.0001])
-      sendParam('/avatar/parameters/aa', [0.0001])
-      sendParam('/avatar/parameters/ih', [0.0001])
-      sendParam('/avatar/parameters/ou', [0.0001])
-      sendParam('/avatar/parameters/E', [0.0001])
-      sendParam('/avatar/parameters/oh', [0.0001])
-      // Reset blendshape parameters when tracking is lost
-      sendParam('/avatar/parameters/Blendshapes/JawOpen', [0.0001])
-      sendParam('/avatar/parameters/Blendshapes/MouthOpen', [0.0001])
-      sendParam('/avatar/parameters/Blendshapes/MouthPucker', [0.0001])
-      sendParam('/avatar/parameters/Blendshapes/MouthSmile', [0.0001])
-      sendParam('/avatar/parameters/Blendshapes/EyeBlinkLeft', [0.0001])
-      sendParam('/avatar/parameters/Blendshapes/EyeBlinkRight', [0.0001])
-      sendParam('/avatar/parameters/Blendshapes/BrowInnerUp', [0.0001])
-      sendParam('/avatar/parameters/Blendshapes/CheekPuff', [0.0001])
-    }
-  }, [threeStateRef, videoElement, sendParam, isWindowVisible])
-
-  // Listen for window visibility changes
   useEffect(() => {
-    if (window.electronAPI && window.electronAPI.onWindowVisibilityChange) {
-      window.electronAPI.onWindowVisibilityChange((isVisible) => {
-        setIsWindowVisible(isVisible)
-        if (isVisible) {
-          setShowAutoHideNotice(false)
-        }
-      })
+    if (!window.electronAPI?.onWindowVisibilityChange) {
+      return;
     }
-  }, [])
+
+    window.electronAPI.onWindowVisibilityChange((isVisible) => {
+      setIsWindowVisible(isVisible);
+      if (isVisible) {
+        setShowAutoHideNotice(false);
+      }
+    });
+  }, []);
 
   useEffect(() => {
     if (!window.electronAPI?.onAutoHideNotice) {
-      return
+      return;
     }
+
     window.electronAPI.onAutoHideNotice((payload) => {
       if (autoHideNoticeTimerRef.current !== null) {
-        window.clearTimeout(autoHideNoticeTimerRef.current)
-        autoHideNoticeTimerRef.current = null
+        window.clearTimeout(autoHideNoticeTimerRef.current);
+        autoHideNoticeTimerRef.current = null;
       }
-      setShowAutoHideNotice(true)
-      const durationMs = payload?.durationMs ?? 1400
+
+      setShowAutoHideNotice(true);
+
+      const durationMs = payload?.durationMs ?? 1400;
       autoHideNoticeTimerRef.current = window.setTimeout(() => {
-        setShowAutoHideNotice(false)
-        autoHideNoticeTimerRef.current = null
-      }, Math.max(600, durationMs + 600))
-    })
-  }, [])
+        setShowAutoHideNotice(false);
+        autoHideNoticeTimerRef.current = null;
+      }, Math.max(600, durationMs + 600));
+    });
 
-  // Load calibration and settings on startup
-  useEffect(() => {
-    const savedHeadCalib = localStorage.getItem('headCalibration')
-    if (savedHeadCalib) {
-      try {
-        const parsed = JSON.parse(savedHeadCalib)
-        calibrationRef.current = {
-          position: vec3.fromValues(parsed.position[0], parsed.position[1], parsed.position[2]),
-          quaternion: quat.fromValues(parsed.quaternion[0], parsed.quaternion[1], parsed.quaternion[2], parsed.quaternion[3])
-        }
-      } catch (e) {
-        console.error('Failed to load head calibration:', e)
+    return () => {
+      if (autoHideNoticeTimerRef.current !== null) {
+        window.clearTimeout(autoHideNoticeTimerRef.current);
+        autoHideNoticeTimerRef.current = null;
       }
-    } else {
-      // Use default calibration if none saved
-      calibrationRef.current = {
-        position: vec3.fromValues(DEFAULT_HEAD_CALIBRATION.position[0], DEFAULT_HEAD_CALIBRATION.position[1], DEFAULT_HEAD_CALIBRATION.position[2]),
-        quaternion: quat.fromValues(DEFAULT_HEAD_CALIBRATION.quaternion[0], DEFAULT_HEAD_CALIBRATION.quaternion[1], DEFAULT_HEAD_CALIBRATION.quaternion[2], DEFAULT_HEAD_CALIBRATION.quaternion[3])
-      }
-    }
-
-    const savedHandCalib = localStorage.getItem('handCalibration')
-    if (savedHandCalib) {
-      try {
-        const parsed = JSON.parse(savedHandCalib)
-        handCalibrationRef.current = parsed
-      } catch (e) {
-        console.error('Failed to load hand calibration:', e)
-      }
-    } else {
-      // Use default calibration if none saved
-      handCalibrationRef.current = {
-        leftHandSize: DEFAULT_HAND_CALIBRATION.leftHandSize,
-        rightHandSize: DEFAULT_HAND_CALIBRATION.rightHandSize,
-        referenceDepth: DEFAULT_HAND_CALIBRATION.referenceDepth
-      }
-    }
-
-    // Load expression mode
-    const savedExpressionMode = localStorage.getItem('expressionMode')
-    if (savedExpressionMode === 'visemeBlendshape' || savedExpressionMode === 'blendshape') {
-      setExpressionMode(savedExpressionMode)
-      appLog('info', `Loaded expression mode: ${savedExpressionMode}`)
-    }
-
-    // Load auto calibrate setting
-    const savedAutoCalibrate = localStorage.getItem('autoCalibrate')
-    if (savedAutoCalibrate !== null) {
-      setAutoCalibrate(savedAutoCalibrate === 'true')
-      appLog('info', `Loaded auto calibrate: ${savedAutoCalibrate}`)
-    }
-
-    // Load blink sync setting
-    const savedBlinkSync = localStorage.getItem('blinkSyncEnabled')
-    if (savedBlinkSync !== null) {
-      setBlinkSyncEnabled(savedBlinkSync === 'true')
-      appLog('info', `Loaded blink sync: ${savedBlinkSync}`)
-    }
-  }, [])
+    };
+  }, []);
 
   useEffect(() => {
-    let cancelled = false
-    let timerId: number | null = null
+    let cancelled = false;
+    let timerId: number | null = null;
 
     const applyCommand = (command: ControlCommand) => {
       if (command.type === 'calibrate') {
         if (command.target === 'head') {
-          handleCalibrate()
-          appLog('info', 'Head calibration triggered via endpoint')
-        } else if (command.target === 'hand') {
-          handleHandCalibrate()
-          appLog('info', 'Hand calibration triggered via endpoint')
+          handleCalibrate();
+          appLog('info', 'Head calibration triggered via endpoint');
+        } else {
+          handleHandCalibrate(() => handResultsRef.current);
+          appLog('info', 'Hand calibration triggered via endpoint');
         }
-        return
+        return;
       }
 
-      if (command.type === 'auto-calibrate') {
-        setAutoCalibrate(command.enabled)
-        localStorage.setItem('autoCalibrate', String(command.enabled))
-        appLog('info', `Auto calibrate set via endpoint: ${command.enabled}`)
-      }
-    }
+      setAutoCalibrate(command.enabled);
+      localStorage.setItem('autoCalibrate', String(command.enabled));
+      appLog('info', `Auto calibrate set via endpoint: ${command.enabled}`);
+    };
 
     const poll = async () => {
       try {
-        const response = await fetch('http://localhost:3000/control-commands', { cache: 'no-store' })
+        const response = await fetch('http://localhost:3000/control-commands', { cache: 'no-store' });
         if (!response.ok) {
-          throw new Error(`HTTP ${response.status}`)
+          throw new Error(`HTTP ${response.status}`);
         }
-        const payload = await response.json()
+
+        const payload: unknown = await response.json();
         if (Array.isArray(payload)) {
           payload.forEach((command) => {
-            if (command && typeof command === 'object' && typeof command.type === 'string') {
-              applyCommand(command as ControlCommand)
+            if (command && typeof command === 'object' && typeof (command as { type?: unknown }).type === 'string') {
+              applyCommand(command as ControlCommand);
             }
-          })
+          });
         }
-      } catch (err) {
-        const now = Date.now()
+      } catch (error) {
+        const now = Date.now();
         if (now - controlPollErrorRef.current > 10000) {
-          appLog('warn', 'Control endpoint unavailable:', err)
-          controlPollErrorRef.current = now
+          appLog('warn', 'Control endpoint unavailable:', error);
+          controlPollErrorRef.current = now;
         }
       } finally {
         if (!cancelled) {
-          timerId = window.setTimeout(poll, CONTROL_POLL_INTERVAL_MS)
+          timerId = window.setTimeout(poll, CONTROL_POLL_INTERVAL_MS);
         }
       }
-    }
+    };
 
-    poll()
+    poll();
 
     return () => {
-      cancelled = true
+      cancelled = true;
       if (timerId !== null) {
-        window.clearTimeout(timerId)
+        window.clearTimeout(timerId);
       }
-    }
-  }, [handleCalibrate, handleHandCalibrate])
+    };
+  }, [handleCalibrate, handleHandCalibrate, handResultsRef]);
 
-  // Camera setup
-  useEffect(() => {
-    const updateDevices = async () => {
-      try {
-        appLog('info', 'Enumerating camera devices...');
-        const deviceInfos = await navigator.mediaDevices.enumerateDevices()
-        const videoDevices = deviceInfos.filter(d => d.kind === 'videoinput')
-        appLog('info', `Found ${videoDevices.length} camera device(s)`);
-        videoDevices.forEach((device, index) => {
-          appLog('info', `  Camera ${index + 1}: ${device.label || 'Unknown device'}`);
-        });
-        setDevices(videoDevices)
-
-        if (videoDevices.length > 0 && !selectedDeviceId) {
-          // Try to load saved camera device
-          const savedDeviceId = localStorage.getItem('selectedCameraDeviceId')
-          const savedDevice = savedDeviceId ? videoDevices.find(d => d.deviceId === savedDeviceId) : null
-
-          if (savedDevice) {
-            setSelectedDeviceId(savedDevice.deviceId)
-            appLog('info', `Loaded saved camera: ${savedDevice.label || 'Unknown device'}`);
-          } else {
-            // Use first available device
-            setSelectedDeviceId(videoDevices[0].deviceId)
-            appLog('info', `Selected default camera: ${videoDevices[0].label || 'Unknown device'}`);
-          }
-        }
-      } catch (err) {
-        appLog('error', 'Failed to enumerate camera devices:', err);
-      }
-    }
-    updateDevices()
-    navigator.mediaDevices.addEventListener('devicechange', updateDevices)
-    return () => navigator.mediaDevices.removeEventListener('devicechange', updateDevices)
-  }, [selectedDeviceId])
-
-  useEffect(() => {
-    if (!isCameraRetryActive) {
-      return
-    }
-
-    appLog('warn', `Camera stream unavailable. Retrying every ${CAMERA_RETRY_INTERVAL_MS / 1000} seconds...`)
-    const timerId = window.setInterval(() => {
-      appLog('info', 'Retrying camera access...')
-      setCameraRetryNonce(current => current + 1)
-    }, CAMERA_RETRY_INTERVAL_MS)
-
-    return () => {
-      window.clearInterval(timerId)
-    }
-  }, [isCameraRetryActive])
-
-  // MediaPipe setup
-  useMediaPipe(
-    videoElement,
-    processResults,
-    selectedDeviceId,
-    setIsLoading,
-    { outputBlendshapes: true }
-  )
-
+  useMediaPipe(videoElement, processResults, selectedDeviceId, setIsLoading, { outputBlendshapes: true });
 
   return (
-    <div className="app-container" style={{ position: 'relative', width: WIDTH, height: HEIGHT, backgroundColor: '#0f0f13', overflow: 'hidden' }}>
+    <div className="app-container" style={{ position: 'relative', width: WIDTH, height: HEIGHT, backgroundColor: '#1a1a2e', overflow: 'hidden' }}>
       <Webcam
         key={`${selectedDeviceId}:${cameraRetryNonce}`}
         audio={false}
@@ -1102,30 +245,28 @@ function App() {
         width={WIDTH}
         height={HEIGHT}
         ref={handleWebcamRef}
-        videoConstraints={{ width: WIDTH, height: HEIGHT, deviceId: selectedDeviceId ? { exact: selectedDeviceId } : undefined }}
+        videoConstraints={{
+          width: WIDTH,
+          height: HEIGHT,
+          deviceId: selectedDeviceId ? { exact: selectedDeviceId } : undefined
+        }}
         onUserMedia={() => {
           if (webcamRef.current?.video) {
             setVideoElement(webcamRef.current.video);
-            setIsCameraRetryActive(false)
-            const deviceName = devices.find(d => d.deviceId === selectedDeviceId)?.label || 'Unknown device';
-            appLog('info', `Camera stream started successfully: ${deviceName}`);
+            handleCameraStarted();
           }
         }}
-        onUserMediaError={(err) => {
-          const willRetry = shouldRetryCameraAccess(err)
-          setVideoElement(null)
-          setIsCameraRetryActive(willRetry)
-          if (!willRetry) {
-            appLog('warn', `Camera access is blocked (${getMediaErrorName(err) || 'unknown'}). Retry is disabled until camera permission changes.`)
-          }
-          appLog('error', 'Camera access failed:', err);
+        onUserMediaError={(error) => {
+          setVideoElement(null);
+          handleCameraError(error);
         }}
       />
+
       <canvas
         ref={canvasRef}
         width={WIDTH}
         height={HEIGHT}
-        style={{ position: 'absolute', width: WIDTH, height: HEIGHT, backgroundColor: '#16161a' }}
+        style={{ position: 'absolute', width: WIDTH, height: HEIGHT, backgroundColor: '#16213e' }}
       />
       <canvas
         ref={threeCanvasRef}
@@ -1134,127 +275,19 @@ function App() {
         style={{ position: 'absolute', width: WIDTH, height: HEIGHT, pointerEvents: 'none' }}
       />
 
-      {isLoading && (
-        <div style={{
-          position: 'absolute',
-          top: 0,
-          left: 0,
-          width: WIDTH,
-          height: HEIGHT,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          backgroundColor: 'rgba(0, 0, 0, 0.8)',
-          zIndex: 100
-        }}>
-          <div style={{ textAlign: 'center' }}>
-            <div style={{
-              fontSize: '24px',
-              fontWeight: 'bold',
-              color: 'white',
-              marginBottom: '10px'
-            }}>
-              Loading MediaPipe Models...
-            </div>
-            <div style={{
-              fontSize: '14px',
-              color: '#888'
-            }}>
-              Downloading face_landmarker and hand_landmarker models (~9MB)
-            </div>
-          </div>
-        </div>
-      )}
-
-      {handCalibCountdown !== null && (
-        <div style={{
-          position: 'absolute',
-          top: 0,
-          left: 0,
-          width: WIDTH,
-          height: HEIGHT,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          backgroundColor: 'rgba(0, 0, 0, 0.5)',
-          pointerEvents: 'none',
-          zIndex: 50
-        }}>
-          <div style={{
-            fontSize: '120px',
-            fontWeight: 'bold',
-            color: 'white',
-            textShadow: '0 0 20px rgba(150, 100, 255, 0.8)'
-          }}>
-            {handCalibCountdown}
-          </div>
-        </div>
-      )}
-
-      {showAutoHideNotice && (
-        <div style={{
-          position: 'absolute',
-          top: 0,
-          left: 0,
-          width: WIDTH,
-          height: HEIGHT,
-          backgroundColor: 'rgba(0, 0, 0, 0.6)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          zIndex: 1000,
-          pointerEvents: 'none'
-        }}>
-          <div style={{
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            gap: 12,
-            padding: '20px 28px',
-            background: 'rgba(20, 20, 26, 0.8)',
-            border: '1px solid rgba(255, 255, 255, 0.12)',
-            borderRadius: 16,
-            boxShadow: '0 12px 30px rgba(0, 0, 0, 0.45)',
-            color: '#fff',
-            textAlign: 'center'
-          }}>
-            <div style={{
-              width: 54,
-              height: 54,
-              borderRadius: 999,
-              background: 'rgba(120, 200, 160, 0.2)',
-              border: '2px solid rgba(160, 240, 200, 0.8)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center'
-            }}>
-              <svg width="30" height="22" viewBox="0 0 30 22" fill="none" aria-hidden="true">
-                <path d="M3 11.5L11 19L27 3" stroke="#E6FFF2" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
-            </div>
-            <div style={{ fontSize: 16, fontWeight: 700, letterSpacing: 0.4 }}>
-              バックグラウンドでトラッキングを続けます
-            </div>
-            <div style={{ fontSize: 12, color: 'rgba(255, 255, 255, 0.75)' }}>
-              ウィンドウは閉じますが動作は継続します
-            </div>
-          </div>
-        </div>
-      )}
+      <LoadingOverlay isVisible={isLoading} width={WIDTH} height={HEIGHT} />
+      <CalibrationCountdown countdown={handCalibCountdown} width={WIDTH} height={HEIGHT} />
+      <AutoHideNotice visible={showAutoHideNotice} width={WIDTH} height={HEIGHT} />
 
       <ControlPanel
         devices={devices}
         selectedDeviceId={selectedDeviceId}
         onDeviceChange={(deviceId) => {
-          setVideoElement(null)
-          setIsCameraRetryActive(false)
-          setSelectedDeviceId(deviceId)
-          localStorage.setItem('selectedCameraDeviceId', deviceId)
-          const device = devices.find(d => d.deviceId === deviceId)
-          appLog('info', `Camera changed and saved: ${device?.label || 'Unknown device'}`)
+          setVideoElement(null);
+          selectDevice(deviceId);
         }}
         onCalibrate={handleCalibrate}
-        onHandCalibrate={handleHandCalibrate}
+        onHandCalibrate={() => handleHandCalibrate(() => handResultsRef.current)}
         onResetCalibration={handleResetCalibration}
         handCalibCountdown={handCalibCountdown}
         mouthDebug={mouthDebug}
@@ -1263,15 +296,15 @@ function App() {
         onSetMode={handleSetMode}
         autoCalibrate={autoCalibrate}
         onAutoCalibrateChange={(enabled) => {
-          setAutoCalibrate(enabled)
-          localStorage.setItem('autoCalibrate', String(enabled))
-          appLog('info', `Auto calibrate saved: ${enabled}`)
+          setAutoCalibrate(enabled);
+          localStorage.setItem('autoCalibrate', String(enabled));
+          appLog('info', `Auto calibrate saved: ${enabled}`);
         }}
         blinkSyncEnabled={blinkSyncEnabled}
         onBlinkSyncChange={(enabled) => {
-          setBlinkSyncEnabled(enabled)
-          localStorage.setItem('blinkSyncEnabled', String(enabled))
-          appLog('info', `Blink sync saved: ${enabled}`)
+          setBlinkSyncEnabled(enabled);
+          localStorage.setItem('blinkSyncEnabled', String(enabled));
+          appLog('info', `Blink sync saved: ${enabled}`);
         }}
         setupStatus={setupStatus}
         resoniteUsername={resoniteUsername}
@@ -1287,7 +320,7 @@ function App() {
         onSetupFacetrack={handleSetupFacetrack}
       />
     </div>
-  )
+  );
 }
 
-export default App
+export default App;
