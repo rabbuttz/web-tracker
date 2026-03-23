@@ -1,0 +1,136 @@
+name: PR Validation
+
+on:
+  pull_request:
+    branches:
+      - main
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
+
+concurrency:
+  group: pr-validation-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  dependency-review:
+    name: Dependency review
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
+
+      - name: Dependency review
+        uses: actions/dependency-review-action@2031cfc080254a8a887f58cffee85186f0e49e48 # v4.9.0
+        with:
+          fail-on-severity: moderate
+          fail-on-scopes: runtime,development
+
+  lint-build:
+    name: Lint and build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash --noprofile --norc -eo pipefail {0}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6
+        with:
+          node-version: 20
+          cache: 'npm'
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: |
+          real_step_summary="${GITHUB_STEP_SUMMARY:-}"
+          export GITHUB_ENV="$(mktemp "${RUNNER_TEMP}/blocked-github-env.XXXXXX")"
+          export GITHUB_OUTPUT="$(mktemp "${RUNNER_TEMP}/blocked-github-output.XXXXXX")"
+          export GITHUB_PATH="$(mktemp "${RUNNER_TEMP}/blocked-github-path.XXXXXX")"
+          export GITHUB_STEP_SUMMARY="$(mktemp "${RUNNER_TEMP}/blocked-github-step-summary.XXXXXX")"
+
+          stop_token="$(openssl rand -hex 16)"
+          exit_code=0
+
+          echo "::stop-commands::$stop_token"
+          npm ci || exit_code=$?
+          echo "::$stop_token::"
+
+          if [ "$exit_code" -ne 0 ]; then
+            if [ -n "$real_step_summary" ]; then
+              {
+                echo "## :x: Dependency Installation Failed"
+                echo "Run \`npm ci\` locally to reproduce."
+              } >> "$real_step_summary"
+            fi
+
+            echo "::error title=npm ci Failed::Dependency installation failed. Ensure package-lock.json is committed and in sync."
+            exit "$exit_code"
+          fi
+
+      - name: Lint
+        run: |
+          real_step_summary="${GITHUB_STEP_SUMMARY:-}"
+          export GITHUB_ENV="$(mktemp "${RUNNER_TEMP}/blocked-github-env.XXXXXX")"
+          export GITHUB_OUTPUT="$(mktemp "${RUNNER_TEMP}/blocked-github-output.XXXXXX")"
+          export GITHUB_PATH="$(mktemp "${RUNNER_TEMP}/blocked-github-path.XXXXXX")"
+          export GITHUB_STEP_SUMMARY="$(mktemp "${RUNNER_TEMP}/blocked-github-step-summary.XXXXXX")"
+
+          stop_token="$(openssl rand -hex 16)"
+          exit_code=0
+
+          echo "::stop-commands::$stop_token"
+          npm run lint || exit_code=$?
+          echo "::$stop_token::"
+
+          if [ "$exit_code" -ne 0 ]; then
+            if [ -n "$real_step_summary" ]; then
+              {
+                echo "## :x: Lint Failed"
+                echo "Run \`npx eslint . --fix\` locally to auto-fix."
+              } >> "$real_step_summary"
+            fi
+
+            echo "::error title=Lint Failed::Linting failed. Run 'npx eslint . --fix' locally to auto-fix, then commit."
+            exit "$exit_code"
+          fi
+
+      - name: Build
+        run: |
+          real_step_summary="${GITHUB_STEP_SUMMARY:-}"
+          export GITHUB_ENV="$(mktemp "${RUNNER_TEMP}/blocked-github-env.XXXXXX")"
+          export GITHUB_OUTPUT="$(mktemp "${RUNNER_TEMP}/blocked-github-output.XXXXXX")"
+          export GITHUB_PATH="$(mktemp "${RUNNER_TEMP}/blocked-github-path.XXXXXX")"
+          export GITHUB_STEP_SUMMARY="$(mktemp "${RUNNER_TEMP}/blocked-github-step-summary.XXXXXX")"
+
+          stop_token="$(openssl rand -hex 16)"
+          exit_code=0
+
+          echo "::stop-commands::$stop_token"
+          npm run build || exit_code=$?
+          echo "::$stop_token::"
+
+          if [ "$exit_code" -ne 0 ]; then
+            if [ -n "$real_step_summary" ]; then
+              {
+                echo "## :x: Build Failed"
+                echo "Run \`npm run build\` locally to see full error output."
+              } >> "$real_step_summary"
+            fi
+
+            echo "::error title=Build Failed::Build failed. Check for TypeScript type errors or missing imports."
+            exit "$exit_code"
+          fi

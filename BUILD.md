@@ -4,17 +4,17 @@ MediaPipe を使った手と顔のトラッキングアプリケーション。R
 
 ## 必要なもの
 
-- Node.js (v18 以降推奨)
-- pnpm (package.json で指定されているバージョン)
+- Node.js (v20 以降推奨)
+- npm (Node.js に同梱)
 
 ## 開発環境でのセットアップ
 
 ```bash
 # 依存関係をインストール
-pnpm install
+npm install
 
 # 開発サーバーを起動（Vite + Electron + Server）
-pnpm start
+npm start
 ```
 
 ## 配布用ビルド
@@ -23,7 +23,7 @@ pnpm start
 
 ```bash
 # ビルドを実行
-pnpm run electron:build:win
+npm run electron:build:win
 ```
 
 ビルドが完了すると、`release` フォルダに以下のファイルが生成されます：
@@ -62,7 +62,7 @@ pnpm run electron:build:win
 ```bash
 # node_modules をクリーンアップして再インストール
 rm -rf node_modules
-pnpm install
+npm install
 ```
 
 ### OSC が送信されない
@@ -75,6 +75,14 @@ pnpm install
 
 - ブラウザがカメラへのアクセスを許可しているか確認
 - 他のアプリケーションがカメラを使用していないか確認
+
+## GitHub Releases
+
+`main` ブランチへの push 時に、Windows 向けビルドが自動で GitHub Releases に prerelease として公開されます。
+
+- **手動リリース**: リポジトリの Actions タブから手動実行も可能です
+- **ダウンロード**: Source code (zip/tar.gz) ではなく、アップロードされた `.exe` ファイルを使用してください
+- **注意**: 未署名ビルドのため、Windows やアンチウイルスソフトの警告が表示される場合があります
 
 ## 技術スタック
 

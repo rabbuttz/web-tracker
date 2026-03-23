@@ -152,21 +152,6 @@ function App() {
     }
   }, [])
 
-  const handleSetupArkit = useCallback(async (username: string, port: number) => {
-    setSetupStatus('Setting up ARKit...');
-    try {
-      const response = await fetch(`http://localhost:3000/setup-arkit?username=${encodeURIComponent(username)}&port=${port}`);
-      const data = await response.json();
-      if (data.success) {
-        setSetupStatus(`Success: Created ${data.createdCount}, Updated ${data.updatedCount}`);
-      } else {
-        setSetupStatus(`Error: ${data.error || 'Failed'}`);
-      }
-    } catch (error) {
-      setSetupStatus(`Error: ${error instanceof Error ? error.message : String(error)}`);
-    }
-  }, [])
-
   const handleSetMode = useCallback((mode: 'visemeBlendshape' | 'blendshape') => {
     setExpressionMode(mode)
   }, [])

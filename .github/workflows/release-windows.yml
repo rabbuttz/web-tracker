@@ -1,0 +1,335 @@
+name: Release Windows App
+
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - '**/*.md'
+      - '.claude/**'
+      - '.codex/**'
+      - '.gemini/**'
+      - '.github/**'
+      - 'codex_help.txt'
+      - 'codex_review_current.txt'
+      - 'codex_review_final.txt'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Optional release tag (example: v1.0.1)"
+        required: false
+        type: string
+      prerelease:
+        description: "Publish as prerelease"
+        required: true
+        default: false
+        type: boolean
+
+concurrency:
+  group: release-windows-${{ github.ref_name }}-${{ inputs.tag || 'edge' }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  release-windows:
+    name: Build and publish Windows release
+    runs-on: windows-latest
+    timeout-minutes: 40
+
+    steps:
+      - name: Reject tag-based dispatch
+        if: github.ref_type == 'tag'
+        shell: pwsh
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          $safeName = $env:REF_NAME -replace '[\r\n]+', ' '
+          Write-Output "::error title=Invalid Dispatch::This workflow was triggered from tag '$safeName'. workflow_dispatch must be run from a branch (e.g., 'main'). Select a branch from the 'Use workflow from' dropdown and re-run."
+          exit 1
+
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6
+        with:
+          node-version: 20
+          cache: 'npm'
+          cache-dependency-path: package-lock.json
+
+      - name: Cache Electron binaries
+        uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5
+        with:
+          path: |
+            ~\AppData\Local\electron\Cache
+            ~\AppData\Local\electron-builder\Cache
+          key: ${{ runner.os }}-electron-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-electron-
+
+      - name: Install dependencies
+        shell: pwsh
+        run: |
+          npm ci
+          $exitCode = $LASTEXITCODE
+          if ($exitCode -ne 0) {
+              Write-Output "::error title=npm ci Failed::Dependency installation failed. Ensure package-lock.json is in sync with package.json."
+              exit $exitCode
+          }
+
+      - name: Validate release version
+        if: github.event_name == 'workflow_dispatch' && inputs.tag != ''
+        id: release_version
+        shell: pwsh
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          $safeTag = $env:INPUT_TAG -replace '[\r\n]+', ' '
+          $semverPattern = '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-((?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*))?\z'
+          if ($env:INPUT_TAG -cnotmatch $semverPattern) {
+            Write-Output "::error title=Invalid Tag::Invalid tag format: '$safeTag'. Expected semver like v1.0.0 or v1.0.0-beta.1"
+            exit 1
+          }
+          $version = $env:INPUT_TAG -replace '^v', ''
+          "version=$version" >> $env:GITHUB_OUTPUT
+
+      - name: Build Windows app
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ steps.release_version.outputs.version }}
+        run: |
+          npm run build
+          $exitCode = $LASTEXITCODE
+          if ($exitCode -ne 0) {
+              Write-Output "::error title=Build Failed::Frontend build failed. Check for TypeScript or Vite errors."
+              if ($env:GITHUB_STEP_SUMMARY) {
+                  try { Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "## :x: Build Failed`nRun ``npm run build`` locally to see full error output." } catch {}
+              }
+              exit $exitCode
+          }
+          if ($env:RELEASE_VERSION -ne '') {
+            npx electron-builder --win --publish never "-c.extraMetadata.version=$($env:RELEASE_VERSION)"
+          } else {
+            npx electron-builder --win --publish never
+          }
+          $exitCode = $LASTEXITCODE
+          if ($exitCode -ne 0) {
+              Write-Output "::error title=Packaging Failed::Electron builder packaging failed."
+              if ($env:GITHUB_STEP_SUMMARY) {
+                  try { Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "## :x: Packaging Failed`nElectron builder exited with code $exitCode." } catch {}
+              }
+              exit $exitCode
+          }
+
+      - name: Verify build output
+        shell: pwsh
+        run: |
+          $assets = Get-ChildItem -Path release -Filter *.exe -File -ErrorAction SilentlyContinue
+          if (-not $assets -or $assets.Count -eq 0) {
+            Write-Output "::error title=No Build Output::No .exe files found in release/ directory. Electron builder may have failed."
+            exit 1
+          }
+          Write-Host "Found $($assets.Count) release asset(s):"
+          $assets | ForEach-Object { Write-Host "  - $($_.Name)" }
+
+      - name: Compute release metadata
+        id: meta
+        shell: pwsh
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+          INPUT_PRERELEASE: ${{ inputs.prerelease }}
+        run: |
+          $shortSha = $env:GITHUB_SHA.Substring(0, 7)
+          $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
+
+          if ($env:GITHUB_EVENT_NAME -eq "workflow_dispatch" -and -not [string]::IsNullOrWhiteSpace($env:INPUT_TAG)) {
+            $semverPattern = '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-((?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*))?\z'
+            $safeTag = $env:INPUT_TAG -replace '[\r\n]+', ' '
+            if ($env:INPUT_TAG -cnotmatch $semverPattern) {
+              Write-Output "::error title=Invalid Tag::Invalid tag format: '$safeTag'. Expected semver like v1.0.0 or v1.0.0-beta.1"
+              exit 1
+            }
+            $tag = $env:INPUT_TAG
+            $title = $env:INPUT_TAG
+            $isPre = $env:INPUT_PRERELEASE
+          } elseif ($env:GITHUB_EVENT_NAME -eq "workflow_dispatch") {
+            $tag = "edge-$stamp-$($env:GITHUB_RUN_ID)-$shortSha"
+            $title = "Edge build $stamp ($shortSha)"
+            $isPre = "true"
+          } else {
+            $tag = "edge-$stamp-$($env:GITHUB_RUN_ID)-$shortSha"
+            $title = "Edge build $stamp ($shortSha)"
+            $isPre = "true"
+          }
+
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+          "title=$title" >> $env:GITHUB_OUTPUT
+          "is_prerelease=$isPre" >> $env:GITHUB_OUTPUT
+
+      - name: Ensure manual release tag exists on current commit
+        if: github.event_name == 'workflow_dispatch' && !startsWith(steps.meta.outputs.tag, 'edge-')
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          $repoApi = "https://api.github.com/repos/$env:GITHUB_REPOSITORY"
+          $headers = @{
+            Authorization = "Bearer $env:GITHUB_TOKEN"
+            Accept = "application/vnd.github+json"
+            "X-GitHub-Api-Version" = "2022-11-28"
+          }
+
+          function Get-HttpStatusCode([System.Exception]$exception) {
+            if ($null -eq $exception.Response) {
+              return $null
+            }
+
+            return [int]$exception.Response.StatusCode
+          }
+
+          function Get-RemoteTagRef {
+            try {
+              return Invoke-RestMethod `
+                -Method Get `
+                -Uri "$repoApi/git/ref/tags/$($env:RELEASE_TAG)" `
+                -Headers $headers
+            } catch {
+              if ((Get-HttpStatusCode $_.Exception) -eq 404) {
+                return $null
+              }
+
+              Write-Output "::error title=API Error::GitHub API request failed unexpectedly."
+              throw
+            }
+          }
+
+          function Resolve-TagCommit([psobject]$tagRef) {
+            $objectType = $tagRef.object.type
+            $objectSha = $tagRef.object.sha
+
+            while ($objectType -eq "tag") {
+              try {
+                $tagObject = Invoke-RestMethod `
+                  -Method Get `
+                  -Uri "$repoApi/git/tags/$objectSha" `
+                  -Headers $headers
+              } catch {
+                Write-Output "::error title=API Error::GitHub API request failed while resolving tag."
+                throw
+              }
+              $objectType = $tagObject.object.type
+              $objectSha = $tagObject.object.sha
+            }
+
+            if ($objectType -ne "commit") {
+              Write-Output "::error title=Tag Error::Unsupported git ref type for tag."
+              exit 1
+            }
+
+            return $objectSha
+          }
+
+          $tagRef = Get-RemoteTagRef
+          if ($null -eq $tagRef) {
+            Write-Host "Tag '$($env:RELEASE_TAG)' not found. Creating at $($env:GITHUB_SHA.Substring(0,7))..."
+
+            $body = @{
+              ref = "refs/tags/$($env:RELEASE_TAG)"
+              sha = $env:GITHUB_SHA
+            } | ConvertTo-Json -Compress
+
+            try {
+              Invoke-RestMethod `
+                -Method Post `
+                -Uri "$repoApi/git/refs" `
+                -Headers $headers `
+                -ContentType "application/json" `
+                -Body $body | Out-Null
+              $tagCommit = $env:GITHUB_SHA
+            } catch {
+              $statusCode = Get-HttpStatusCode $_.Exception
+              if ($statusCode -ne 422) {
+                Write-Output "::error title=API Error::GitHub API request failed unexpectedly."
+                throw
+              }
+
+              $tagRef = Get-RemoteTagRef
+              if ($null -eq $tagRef) {
+                Write-Output "::error title=Tag Creation Failed::Failed to create tag. GitHub rejected the request."
+                exit 1
+              }
+
+              $tagCommit = Resolve-TagCommit $tagRef
+            }
+          } else {
+            $tagCommit = Resolve-TagCommit $tagRef
+          }
+
+          if ($tagCommit -ne $env:GITHUB_SHA) {
+            Write-Output "::error title=Tag Mismatch::Tag points to a different commit. Run from the tagged commit or use a new tag."
+            exit 1
+          }
+
+          Write-Host "Tag '$($env:RELEASE_TAG)' is ready on the current commit."
+
+      - name: Create GitHub release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.meta.outputs.tag }}
+          RELEASE_TITLE: ${{ steps.meta.outputs.title }}
+          RELEASE_IS_PRERELEASE: ${{ steps.meta.outputs.is_prerelease }}
+        run: |
+          $notes = @"
+          ## Highlights
+          - Windows build for Web Tracker
+          - Built from commit $env:GITHUB_SHA
+          - This build is unsigned, so Windows or antivirus warnings may appear
+
+          ## Assets
+          "@
+
+          $releaseAssets = @(Get-ChildItem -Path release -Filter *.exe -File -ErrorAction Stop |
+            Sort-Object Name)
+          if (-not $releaseAssets) {
+            Write-Output "::error title=No Build Output::No .exe files found in release/ directory."
+            exit 1
+          }
+          $assetList = ($releaseAssets | ForEach-Object { "- $($_.Name)" }) -join "`n"
+          $notes += "`n$assetList`n`n## Download`nPlease use the uploaded release assets (.exe files), not the source code archives."
+
+          $assetPaths = @($releaseAssets | Select-Object -ExpandProperty FullName)
+
+          $ghArgs = @(
+            "release", "create", $env:RELEASE_TAG,
+            "--target", $env:GITHUB_SHA
+          ) + $assetPaths + @(
+            "--title", $env:RELEASE_TITLE,
+            "--generate-notes",
+            "--notes", $notes
+          )
+
+          if ($env:RELEASE_IS_PRERELEASE -eq "true") {
+            $ghArgs += "--prerelease"
+          }
+
+          # Edge builds should never be "latest", regardless of prerelease flag
+          if ($env:RELEASE_TAG.StartsWith("edge-")) {
+            $ghArgs += "--latest=false"
+          }
+
+          gh @ghArgs
+          $exitCode = $LASTEXITCODE
+          if ($exitCode -ne 0) {
+              Write-Output "::error title=Release Failed::Failed to create GitHub release. Check for existing release with same tag."
+              if ($env:GITHUB_STEP_SUMMARY) {
+                  try { Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "## :x: Release Failed`n``gh release create`` exited with code $exitCode." } catch {}
+              }
+              exit $exitCode
+          }

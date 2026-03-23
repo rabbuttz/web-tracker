@@ -1,3 +1,6 @@
+[![PR Validation](https://github.com/rabbuttz/web-tracker/actions/workflows/pr-validation.yml/badge.svg)](https://github.com/rabbuttz/web-tracker/actions/workflows/pr-validation.yml)
+[![Release Windows App](https://github.com/rabbuttz/web-tracker/actions/workflows/release-windows.yml/badge.svg)](https://github.com/rabbuttz/web-tracker/actions/workflows/release-windows.yml)
+
 # React + TypeScript + Vite
 
 This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.

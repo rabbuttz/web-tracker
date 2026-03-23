@@ -1,0 +1,399 @@
+name: Dev Build Windows App
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: "Branch to build (e.g., feature/my-branch)"
+        required: true
+        type: string
+
+# Zero permissions by default. Each job escalates explicitly.
+permissions: {}
+
+concurrency:
+  group: dev-build-${{ inputs.branch }}
+  cancel-in-progress: true
+
+jobs:
+  # ============================================================
+  # Job 1: build (runs UNTRUSTED branch code)
+  # - Only `contents: read` — no write token available
+  # - GITHUB_ENV/PATH/OUTPUT sinks block command-file poisoning
+  # ============================================================
+  build:
+    name: Build Windows exe (untrusted branch)
+    runs-on: windows-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+
+    outputs:
+      source_ref: ${{ steps.validate.outputs.source_ref }}
+      source_sha: ${{ steps.validate.outputs.source_sha }}
+      branch_slug: ${{ steps.validate.outputs.branch_slug }}
+      artifact_id: ${{ steps.upload.outputs.artifact-id }}
+      artifact_digest: ${{ steps.upload.outputs.artifact-digest }}
+
+    steps:
+      # ----------------------------------------------------------
+      # Step 0: Reject tag-based dispatch
+      # ----------------------------------------------------------
+      - name: Reject tag-based dispatch
+        if: github.ref_type == 'tag'
+        shell: bash
+        run: |
+          echo "::error title=Invalid Dispatch::This workflow was triggered from a tag. Select a branch from the 'Use workflow from' dropdown and re-run."
+          exit 1
+
+      # ----------------------------------------------------------
+      # Step 1: Validate branch input and resolve to immutable SHA
+      # (Trusted step — runs BEFORE untrusted code checkout)
+      # ----------------------------------------------------------
+      - name: Validate branch input and resolve SHA
+        id: validate
+        shell: bash
+        env:
+          INPUT_BRANCH: ${{ inputs.branch }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          # --- Character format validation ---
+          if [[ ! "$INPUT_BRANCH" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$ ]]; then
+            echo "::error::Invalid branch name format: '$INPUT_BRANCH'"
+            exit 1
+          fi
+
+          # --- Reject dangerous patterns ---
+          if [[ "$INPUT_BRANCH" == *".."* ]] || \
+             [[ "$INPUT_BRANCH" == *".lock"* ]] || \
+             [[ "$INPUT_BRANCH" == *"@{"* ]] || \
+             [[ "$INPUT_BRANCH" == *"//"* ]]; then
+            echo "::error::Branch name contains forbidden pattern: '$INPUT_BRANCH'"
+            exit 1
+          fi
+
+          # --- Reject default branch ---
+          if [[ "$INPUT_BRANCH" == "$DEFAULT_BRANCH" ]]; then
+            echo "::error::Cannot build the default branch ($DEFAULT_BRANCH). Use the release workflow instead."
+            exit 1
+          fi
+
+          # --- Resolve branch to SHA via GitHub API ---
+          sha=$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${INPUT_BRANCH}" \
+            --jq '.object.sha' 2>/dev/null) || {
+            echo "::error::Branch '$INPUT_BRANCH' not found in repository"
+            exit 1
+          }
+
+          # --- Validate SHA format ---
+          if [[ ! "$sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Resolved SHA is not a valid 40-char hex: '$sha'"
+            exit 1
+          fi
+
+          # --- Generate sanitized slug ---
+          slug=$(printf '%s' "$INPUT_BRANCH" \
+            | tr '[:upper:]' '[:lower:]' \
+            | sed 's/[^a-z0-9._-]/-/g' \
+            | sed 's/--*/-/g' \
+            | sed 's/^[-.]//;s/[-.]$//')
+          if [ ${#slug} -gt 32 ]; then
+            hash=$(printf '%s' "$INPUT_BRANCH" | sha256sum | cut -c1-8)
+            slug="${slug:0:23}-${hash}"
+          fi
+
+          echo "source_ref=refs/heads/${INPUT_BRANCH}" >> "$GITHUB_OUTPUT"
+          echo "source_sha=${sha}" >> "$GITHUB_OUTPUT"
+          echo "branch_slug=${slug}" >> "$GITHUB_OUTPUT"
+          echo "Resolved: $INPUT_BRANCH -> $sha (slug: $slug)"
+
+      # ----------------------------------------------------------
+      # Step 2: Checkout (SHA-pinned, no branch name in ref)
+      # ----------------------------------------------------------
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          ref: ${{ steps.validate.outputs.source_sha }}
+          persist-credentials: false
+          fetch-depth: 1
+          submodules: false
+          lfs: false
+
+      # ----------------------------------------------------------
+      # Step 3: Verify checkout integrity
+      # ----------------------------------------------------------
+      - name: Verify checkout integrity
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ steps.validate.outputs.source_sha }}
+        run: |
+          actual_sha=$(git rev-parse HEAD)
+          if [[ "$actual_sha" != "$EXPECTED_SHA" ]]; then
+            echo "::error::Checkout integrity failed: expected $EXPECTED_SHA, got $actual_sha"
+            exit 1
+          fi
+          echo "Checkout integrity verified: $actual_sha"
+
+      # ----------------------------------------------------------
+      # Step 4: Node.js setup (same pattern as release workflow)
+      # ----------------------------------------------------------
+      - name: Setup Node.js
+        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6
+        with:
+          node-version: 20
+          # npm cache intentionally disabled to prevent cross-trust-boundary
+          # cache poisoning. Dev builds use isolated manual cache below.
+
+      - name: Cache npm dependencies (isolated from release)
+        uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5
+        with:
+          path: ~\AppData\Local\npm-cache
+          key: dev-${{ runner.os }}-npm-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            dev-${{ runner.os }}-npm-
+
+      # ----------------------------------------------------------
+      # Step 5: Electron binary cache (ISOLATED from release workflow)
+      # Uses 'dev-' prefix to prevent cross-trust-boundary cache poisoning.
+      # ----------------------------------------------------------
+      - name: Cache Electron binaries
+        uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5
+        with:
+          path: |
+            ~\AppData\Local\electron\Cache
+            ~\AppData\Local\electron-builder\Cache
+          key: dev-${{ runner.os }}-electron-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            dev-${{ runner.os }}-electron-
+
+      # ----------------------------------------------------------
+      # Step 6: Build (UNTRUSTED — command-file sinks active)
+      #
+      # GITHUB_ENV/OUTPUT/PATH/STEP_SUMMARY are redirected to
+      # blocked files as DEFENSE-IN-DEPTH. This raises the bar for
+      # casual exploitation but is NOT a complete security boundary.
+      # The real security boundary is the job separation — the
+      # publish job runs on a different VM with no shared state.
+      #
+      # Bypass vectors: untrusted code can discover the real
+      # command-file paths via RUNNER_TEMP directory scanning.
+      # ----------------------------------------------------------
+      - name: Build Windows app (untrusted code)
+        shell: pwsh
+        env:
+          GITHUB_ENV: ${{ runner.temp }}\blocked-github-env.txt
+          GITHUB_OUTPUT: ${{ runner.temp }}\blocked-github-output.txt
+          GITHUB_PATH: ${{ runner.temp }}\blocked-github-path.txt
+          GITHUB_STEP_SUMMARY: ${{ runner.temp }}\blocked-github-step-summary.md
+        run: |
+          npm ci
+          $exitCode = $LASTEXITCODE
+          if ($exitCode -ne 0) {
+              Write-Output "::error title=npm ci Failed::Dependency installation failed."
+              exit $exitCode
+          }
+          npm run build
+          $exitCode = $LASTEXITCODE
+          if ($exitCode -ne 0) {
+              Write-Output "::error title=Build Failed::Frontend build failed."
+              exit $exitCode
+          }
+          npx electron-builder --win --publish never
+          $exitCode = $LASTEXITCODE
+          if ($exitCode -ne 0) {
+              Write-Output "::error title=Packaging Failed::Electron builder packaging failed."
+              exit $exitCode
+          }
+
+      # ----------------------------------------------------------
+      # Step 7: Upload artifact (immutable, overwrite disabled)
+      # This is an untrusted handoff — the artifact content is
+      # attacker-controlled. The publish job re-validates everything.
+      # ----------------------------------------------------------
+      - name: Upload artifact
+        id: upload
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: windows-exe-${{ steps.validate.outputs.source_sha }}
+          path: release/*.exe
+          if-no-files-found: error
+          retention-days: 7
+          overwrite: false
+
+  # ============================================================
+  # Job 2: publish (TRUSTED code only — no untrusted checkout)
+  # - Runs on ubuntu (different OS = reduced attack surface)
+  # - Has `contents: write` for release creation
+  # - Re-validates all metadata from build job
+  # - Computes checksums independently (not from build outputs)
+  # ============================================================
+  publish:
+    name: Publish pre-release (trusted)
+    runs-on: ubuntu-latest
+    needs: build
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    # Uncomment the next line after creating the GitHub Environment
+    # with at least 1 required reviewer for extra protection.
+    # environment: untrusted-build-publish
+
+    steps:
+      # ----------------------------------------------------------
+      # Step 1: Re-validate all metadata from the build job
+      # ----------------------------------------------------------
+      - name: Validate build metadata
+        shell: bash
+        env:
+          SOURCE_REF: ${{ needs.build.outputs.source_ref }}
+          SOURCE_SHA: ${{ needs.build.outputs.source_sha }}
+          BRANCH_SLUG: ${{ needs.build.outputs.branch_slug }}
+          ARTIFACT_ID: ${{ needs.build.outputs.artifact_id }}
+          ARTIFACT_DIGEST: ${{ needs.build.outputs.artifact_digest }}
+        run: |
+          set -euo pipefail
+          errors=0
+
+          if [[ ! "$SOURCE_REF" =~ ^refs/heads/ ]]; then
+            echo "::error::Invalid source_ref: '$SOURCE_REF'"
+            errors=$((errors + 1))
+          fi
+
+          if [[ ! "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Invalid source_sha: '$SOURCE_SHA'"
+            errors=$((errors + 1))
+          fi
+
+          if [[ ! "$BRANCH_SLUG" =~ ^[a-z0-9._-]{1,40}$ ]]; then
+            echo "::error::Invalid branch_slug: '$BRANCH_SLUG'"
+            errors=$((errors + 1))
+          fi
+
+          if [[ ! "$ARTIFACT_ID" =~ ^[0-9]+$ ]]; then
+            echo "::error::Invalid artifact_id: '$ARTIFACT_ID'"
+            errors=$((errors + 1))
+          fi
+
+          if [[ ! "$ARTIFACT_DIGEST" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "::error::Invalid artifact_digest: '$ARTIFACT_DIGEST'"
+            errors=$((errors + 1))
+          fi
+
+          if [ "$errors" -gt 0 ]; then
+            echo "::error::Metadata validation failed with $errors error(s)"
+            exit 1
+          fi
+
+          echo "All metadata validated successfully"
+
+      # ----------------------------------------------------------
+      # Step 2: Download artifact by immutable ID (not by name)
+      # ----------------------------------------------------------
+      - name: Download artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          artifact-ids: ${{ needs.build.outputs.artifact_id }}
+          path: artifacts
+
+      # ----------------------------------------------------------
+      # Step 3: Create GitHub pre-release
+      # - Tag/title/checksums computed HERE (not from build outputs)
+      # - Release notes include untrusted-build warning
+      # ----------------------------------------------------------
+      - name: Create pre-release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ needs.build.outputs.source_sha }}
+          BRANCH_SLUG: ${{ needs.build.outputs.branch_slug }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+
+          short_sha="${SOURCE_SHA:0:7}"
+          tag="dev-${BRANCH_SLUG}-${short_sha}-${RUN_ID}-a${RUN_ATTEMPT}"
+          title="Dev build: ${BRANCH_SLUG} @ ${short_sha}"
+
+          # --- Collect .exe files from artifact download ---
+          staging_dir=$(mktemp -d)
+          find artifacts -name '*.exe' -type f -print0 \
+            | xargs -0 -I{} cp -- {} "$staging_dir/"
+
+          exe_count=$(find "$staging_dir" -maxdepth 1 -name '*.exe' -type f | wc -l)
+          if [ "$exe_count" -eq 0 ]; then
+            echo "::error::No .exe files found in downloaded artifacts"
+            exit 1
+          fi
+
+          # --- Sanitize .exe filenames (reject attacker-controlled names) ---
+          # Filenames starting with '-' could inject options into CLI tools.
+          cd "$staging_dir"
+          for exe in *.exe; do
+            if [[ "$exe" == -* ]]; then
+              echo "::error::Rejecting unsafe filename starting with dash: '$exe'"
+              exit 1
+            fi
+            if [[ ! "$exe" =~ ^[A-Za-z0-9][A-Za-z0-9_.\ -]*\.exe$ ]]; then
+              echo "::error::Rejecting filename with unexpected characters: '$exe'"
+              exit 1
+            fi
+          done
+
+          # --- Compute SHA256 checksums in THIS job (not from build) ---
+          sha256sum -- *.exe > SHA256SUMS.txt || {
+            echo "::error title=Checksum Failed::SHA256 checksum computation failed."
+            exit 1
+          }
+          echo "=== SHA256 Checksums ==="
+          cat SHA256SUMS.txt
+
+          # --- Build release notes ---
+          {
+            echo "## :warning: Untrusted Dev Build"
+            echo ""
+            echo "**This is a development build from a feature branch.**"
+            echo "**It has NOT been reviewed or approved. Do not use in production.**"
+            echo ""
+            echo "This build is unsigned. Windows SmartScreen or antivirus warnings may appear."
+            echo ""
+            echo "## Build Info"
+            echo "- Branch: \`${BRANCH_SLUG}\`"
+            echo "- Commit: \`${SOURCE_SHA}\`"
+            echo "- Run: [#${RUN_ID}](https://github.com/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID})"
+            echo ""
+            echo "## SHA256 Checksums"
+            echo "\`\`\`"
+            cat SHA256SUMS.txt
+            echo "\`\`\`"
+            echo ""
+            echo "## Assets"
+            for exe in *.exe; do
+              echo "- ${exe}"
+            done
+          } > release_notes.md
+
+          # --- Collect safe file paths for gh release ---
+          upload_files=()
+          for exe in *.exe; do
+            upload_files+=("./${exe}")
+          done
+          upload_files+=("./SHA256SUMS.txt")
+
+          # --- Create GitHub pre-release ---
+          gh release create "$tag" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$SOURCE_SHA" \
+            --title "$title" \
+            --notes-file release_notes.md \
+            --prerelease \
+            --latest=false \
+            -- "${upload_files[@]}" || {
+            echo "::error title=Release Failed::Failed to create pre-release. Check for tag conflicts."
+            exit 1
+          }
+
+          echo "Release created: $tag"
